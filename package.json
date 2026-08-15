@@ -1,0 +1,98 @@
+{
+  "name": "aisubs",
+  "version": "0.1.0",
+  "description": "Connect AI provider accounts and use those subscriptions from any local tool or as api.",
+  "license": "MIT",
+  "author": {
+    "name": "meetpatel"
+  },
+  "bin": {
+    "aisubs": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "dashboard/public/aisubs-mark.svg",
+    "examples",
+    "public",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
+    },
+    "./dashboard": {
+      "types": "./dist/dashboard.d.ts",
+      "import": "./dist/dashboard.js"
+    },
+    "./providers/chatgpt": {
+      "types": "./dist/providers/chatgpt.d.ts",
+      "import": "./dist/providers/chatgpt.js"
+    },
+    "./providers/claude": {
+      "types": "./dist/providers/claude.d.ts",
+      "import": "./dist/providers/claude.js"
+    },
+    "./providers/copilot": {
+      "types": "./dist/providers/copilot.d.ts",
+      "import": "./dist/providers/copilot.js"
+    },
+    "./providers/grok": {
+      "types": "./dist/providers/grok.d.ts",
+      "import": "./dist/providers/grok.js"
+    },
+    "./providers/opencode": {
+      "types": "./dist/providers/opencode.d.ts",
+      "import": "./dist/providers/opencode.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "node --run build && node scripts/dev.mjs",
+    "prepare": "node --run build",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && tsc -p dashboard/tsconfig.json --noEmit && vite build --config dashboard/vite.config.ts",
+    "prepack": "node --run check",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p dashboard/tsconfig.json",
+    "lint": "oxlint .",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "check": "node --run typecheck && node --run lint && node --run fmt:check && node --run test && node --run build"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "lucide-react": "^1.31.0",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "nub",
+      "version": "^0.6.0",
+      "onFail": "warn"
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

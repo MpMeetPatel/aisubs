@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug]: "
+labels:
+  - bug
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove credentials, tokens, and private data. Do not use this
+        form for security vulnerabilities.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched for duplicates, reproduced this myself, removed secrets, and wrote this report in my own words.
+          required: true
+        - label: If a tool helped me investigate, I verified and rewrote the result myself.
+          required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Version and environment
+      description: Include the version or commit, OS, Node.js version, and affected package or area.
+      placeholder: |
+        Version:
+        OS:
+        Node.js:
+        Area:
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include expected behavior, actual behavior, and exact error text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and reproduction
+      description: Give the smallest reliable steps, failing test, reproduction link, or sanitized output.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add screenshots or related issues if useful.

@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a focused improvement with a clear user need
+title: "[Feature]: "
+labels:
+  - enhancement
+  - triage
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched for similar requests and am submitting this proposal myself, in my own words.
+          required: true
+        - label: If a tool helped me write this, I reviewed and rewrote the result myself.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What problem would this solve, and who experiences it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful improvement.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, screenshots, or constraints. Remove secrets.
