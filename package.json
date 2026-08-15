@@ -2,9 +2,33 @@
   "name": "aisubs",
   "version": "0.1.0",
   "description": "Connect AI provider accounts and use those subscriptions from any local tool or as api.",
+  "keywords": [
+    "ai",
+    "ai-subscription-manager",
+    "ai-subscription-to-api",
+    "ai-subscriptions",
+    "ai-subtoapi",
+    "anthropic",
+    "chatgpt",
+    "github-copilot",
+    "grok",
+    "grok-build",
+    "llm",
+    "oauth",
+    "openai",
+    "opencode"
+  ],
+  "homepage": "https://github.com/MpMeetPatel/aisubs#readme",
+  "bugs": {
+    "url": "https://github.com/MpMeetPatel/aisubs/issues"
+  },
   "license": "MIT",
   "author": {
     "name": "meetpatel"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MpMeetPatel/aisubs.git"
   },
   "bin": {
     "aisubs": "./dist/cli.js"
