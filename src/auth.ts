@@ -59,6 +59,15 @@ function normalizeAccountKey(value: unknown): string {
   return account;
 }
 
+function createRequest(input: string | URL | Request, init?: RequestInit): Request {
+  return new Request(
+    input,
+    init?.body instanceof ReadableStream
+      ? ({ ...init, duplex: "half" } as RequestInit & { duplex: "half" })
+      : init,
+  );
+}
+
 function credentialKey(provider: ProviderId, accountKey: string): ProviderId {
   if (accountKey === DEFAULT_ACCOUNT) return provider;
   return `${ACCOUNT_STORAGE_PREFIX}${Buffer.from(JSON.stringify([provider, accountKey])).toString("base64url")}`;
@@ -491,7 +500,7 @@ export class SubscriptionAuth {
     account = DEFAULT_ACCOUNT,
   ): Promise<Response> {
     const adapter = this.adapter(provider);
-    const original = new Request(input, init);
+    const original = createRequest(input, init);
     const accountKey = normalizeAccountKey(account);
     const send = async (credential: OAuthCredential) => {
       const authorized = await adapter.authorize(original.clone(), credential);
@@ -522,7 +531,7 @@ export class SubscriptionAuth {
     const accountKey = normalizeAccountKey(account);
     const credential = await this.credential(provider, accountKey);
     if (adapter.proxy) {
-      const local = new Request(`http://aisubs.local/${path.replace(/^\//, "")}`, init);
+      const local = createRequest(`http://aisubs.local/${path.replace(/^\//, "")}`, init);
       let response = await adapter.proxy(local.clone(), credential);
       if (response.status === 401) {
         await response.body?.cancel();

@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   FileCredentialStore,
+  FileApiKeyStore,
   chatGptProvider,
   copilotProvider,
   createSubscriptionAuth,
@@ -10,11 +10,13 @@ import {
 } from "aisubs";
 import { createSubscriptionAuthServer } from "aisubs/http";
 
-const apiKey = process.env.AISUBS_API_KEY ?? randomBytes(24).toString("hex");
+const directory = join(homedir(), ".aisubs-demo");
+const apiKey =
+  process.env.AISUBS_API_KEY ??
+  (await new FileApiKeyStore(join(directory, "api-key")).readOrCreate());
 const auth = createSubscriptionAuth({
-  store: new FileCredentialStore(join(homedir(), ".aisubs-demo", "credentials.json")),
+  store: new FileCredentialStore(join(directory, "credentials.json")),
   providers: [chatGptProvider(), copilotProvider(), grokProvider()],
 });
 const server = await createSubscriptionAuthServer({ auth, apiKey, port: 4319 });
 console.log(`AI Subs API: ${server.url}`);
-console.log(`API key: ${apiKey}`);

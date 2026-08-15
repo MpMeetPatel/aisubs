@@ -88,6 +88,98 @@ export function routeSegments(pathname: string): string[] {
   return pathname.split("/").filter(Boolean).map(decodeURIComponent);
 }
 
+function chatCompletionRequest(body: Buffer): { model: string; body: string } {
+  const raw: unknown = JSON.parse(body.toString("utf8"));
+  if (!isRecord(raw) || !Array.isArray(raw.messages)) {
+    throw new Error("Chat Completions requires a messages array");
+  }
+  const model = stringValue(raw.model);
+  if (!model) throw new Error("Chat Completions requires a model");
+  if (raw.stream === true) {
+    throw new Error("ChatGPT Chat Completions compatibility does not support streaming");
+  }
+  const instructions: string[] = [];
+  const input: Array<{ role: string; content: Array<{ type: string; text: string }> }> = [];
+  for (const message of raw.messages) {
+    if (!isRecord(message)) throw new Error("Chat Completions messages must be objects");
+    const role = stringValue(message.role);
+    const content = stringValue(message.content);
+    if (!role || content == null) {
+      throw new Error("ChatGPT compatibility supports text-only messages");
+    }
+    if (role === "system" || role === "developer") instructions.push(content);
+    else if (role === "user" || role === "assistant") {
+      input.push({
+        role,
+        content: [{ type: role === "assistant" ? "output_text" : "input_text", text: content }],
+      });
+    } else throw new Error(`Unsupported Chat Completions role: ${role}`);
+  }
+  const translated: Record<string, unknown> = { model, store: false, stream: true, input };
+  if (instructions.length) translated.instructions = instructions.join("\n\n");
+  const maxOutputTokens = raw.max_completion_tokens ?? raw.max_tokens;
+  if (typeof maxOutputTokens === "number") translated.max_output_tokens = maxOutputTokens;
+  if (
+    isRecord(raw.response_format) &&
+    raw.response_format.type === "json_schema" &&
+    isRecord(raw.response_format.json_schema)
+  ) {
+    translated.text = { format: { type: "json_schema", ...raw.response_format.json_schema } };
+  }
+  return { model, body: JSON.stringify(translated) };
+}
+
+function responseText(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined;
+  const direct = stringValue(raw.output_text);
+  if (direct != null) return direct;
+  if (!Array.isArray(raw.output)) return undefined;
+  const text = raw.output.flatMap((item) => {
+    if (!isRecord(item) || !Array.isArray(item.content)) return [];
+    return item.content.flatMap((part) =>
+      isRecord(part) && part.type === "output_text" && stringValue(part.text) != null
+        ? [stringValue(part.text)!]
+        : [],
+    );
+  });
+  return text.length ? text.join("") : undefined;
+}
+
+async function chatCompletionResponse(upstream: Response, model: string): Promise<Response> {
+  if (!upstream.ok) return upstream;
+  let completed: unknown;
+  let content = "";
+  const body = await upstream.text();
+  if (body.startsWith("event:") || body.startsWith("data:")) {
+    for (const line of body.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      const event: unknown = JSON.parse(data);
+      if (!isRecord(event)) continue;
+      if (event.type === "response.output_text.delta") content += stringValue(event.delta) ?? "";
+      if (event.type === "response.completed") completed = event.response;
+    }
+  } else completed = JSON.parse(body);
+  content ||= responseText(completed) ?? "";
+  const raw = isRecord(completed) ? completed : {};
+  const usage = isRecord(raw.usage)
+    ? {
+        prompt_tokens: raw.usage.input_tokens,
+        completion_tokens: raw.usage.output_tokens,
+        total_tokens: raw.usage.total_tokens,
+      }
+    : undefined;
+  return Response.json({
+    id: stringValue(raw.id) ?? `chatcmpl_${crypto.randomUUID()}`,
+    object: "chat.completion",
+    created: typeof raw.created_at === "number" ? raw.created_at : Math.floor(Date.now() / 1000),
+    model: stringValue(raw.model) ?? model,
+    choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+    ...(usage ? { usage } : {}),
+  });
+}
+
 export async function handleSubscriptionAuthApi(
   auth: SubscriptionAuth,
   request: IncomingMessage,
@@ -97,6 +189,25 @@ export async function handleSubscriptionAuthApi(
 ): Promise<boolean> {
   const parts = routeSegments(url.pathname);
   if (parts[0] === "aisubs" && parts[1] && parts[2] && request.method !== "OPTIONS") {
+    const upstreamParts = parts.slice(3);
+    const versioned = upstreamParts[0] === "v1";
+    if (versioned) upstreamParts.shift();
+    if (versioned && upstreamParts[0] === "embeddings") {
+      sendJson(response, 404, { error: "AISubs does not expose an embeddings API" });
+      return true;
+    }
+    if (versioned && request.method === "GET" && upstreamParts.join("/") === "models") {
+      const catalog = await auth.getModels(parts[1] as ProviderId, parts[2]);
+      sendJson(response, 200, {
+        object: "list",
+        data: (catalog?.models ?? []).map((model) => ({
+          id: model.id,
+          object: "model",
+          owned_by: parts[1],
+        })),
+      });
+      return true;
+    }
     const headers = new Headers();
     const privateHeaders = new Set([
       "authorization",
@@ -119,13 +230,31 @@ export async function handleSubscriptionAuthApi(
       }
     }
     const body = await readProxyBody(request, maxProxyBodyBytes);
-    const path = parts.slice(3).map(encodeURIComponent).join("/") + url.search;
+    let path = upstreamParts.map(encodeURIComponent).join("/") + url.search;
+    let proxyBody = body;
+    let chatCompletionModel: string | undefined;
+    if (
+      parts[1] === "chatgpt" &&
+      versioned &&
+      request.method === "POST" &&
+      upstreamParts.join("/") === "chat/completions"
+    ) {
+      const translated = chatCompletionRequest(body);
+      path = "responses";
+      proxyBody = Buffer.from(translated.body);
+      chatCompletionModel = translated.model;
+      headers.set("accept", "text/event-stream");
+      headers.set("content-type", "application/json");
+    }
     const upstream = await auth.proxy(parts[1] as ProviderId, parts[2], path, {
       method: request.method,
       headers,
-      body: body.length ? (body as unknown as BodyInit) : undefined,
+      body: proxyBody.length ? (proxyBody as unknown as BodyInit) : undefined,
     });
-    await sendUpstream(response, upstream);
+    await sendUpstream(
+      response,
+      chatCompletionModel ? await chatCompletionResponse(upstream, chatCompletionModel) : upstream,
+    );
     return true;
   }
   if (request.method === "GET" && parts.join("/") === "v1/providers") {

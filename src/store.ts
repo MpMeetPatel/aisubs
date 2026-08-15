@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { chmod, link, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { CredentialStore, OAuthCredential, ProviderId } from "./types.js";
@@ -11,6 +11,52 @@ const LOCK_STALE_MS = 120_000;
 export function defaultAiSubsDataDir(): string {
   const override = process.env.AISUBS_DATA_DIR?.trim();
   return override ? resolve(override) : join(homedir(), ".aisubs");
+}
+
+export class FileApiKeyStore {
+  readonly file: string;
+
+  constructor(file: string) {
+    this.file = file;
+  }
+
+  async readOrCreate(): Promise<string> {
+    try {
+      const value = (await readFile(this.file, "utf8")).trim();
+      if (value) return value;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const value = `aisubs_${randomBytes(32).toString("base64url")}`;
+    const temp = `${this.file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(temp, `${value}\n`, { mode: 0o600 });
+      try {
+        await link(temp, this.file);
+        return value;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const existing = (await readFile(this.file, "utf8")).trim();
+        return existing || this.regenerate();
+      }
+    } finally {
+      await rm(temp, { force: true }).catch(() => {});
+    }
+  }
+
+  async regenerate(): Promise<string> {
+    const value = `aisubs_${randomBytes(32).toString("base64url")}`;
+    const temp = `${this.file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(temp, `${value}\n`, { mode: 0o600 });
+      await rename(temp, this.file);
+      return value;
+    } finally {
+      await rm(temp, { force: true }).catch(() => {});
+    }
+  }
 }
 
 async function readEnvelope(file: string): Promise<Record<string, OAuthCredential>> {

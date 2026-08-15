@@ -237,6 +237,29 @@ describe("SubscriptionAuth", () => {
     expect(rejected?.bodyUsed).toBe(true);
   });
 
+  test("accepts the request stream body forwarded by an AI SDK fetch adapter", async () => {
+    const store = new MemoryCredentialStore();
+    await store.modify("test", () => ({
+      accessToken: "secret",
+      expiresAt: Date.now() + 60_000,
+    }));
+    const proxy = vi.fn(async (request: Request) => new Response(await request.text()));
+    const auth = new SubscriptionAuth(store, [adapter({ proxy })]);
+    const sdkRequest = new Request("https://aisubs.invalid/v1/responses", {
+      method: "POST",
+      body: "payload",
+    });
+
+    const response = await auth.account("test").proxy("responses", {
+      method: sdkRequest.method,
+      headers: sdkRequest.headers,
+      body: sdkRequest.body,
+    });
+
+    await expect(response.text()).resolves.toBe("payload");
+    expect(proxy).toHaveBeenCalledOnce();
+  });
+
   test("removes permanent refresh failures but preserves transient ones", async () => {
     const permanentStore = new MemoryCredentialStore();
     await permanentStore.modify("test", () => expired());

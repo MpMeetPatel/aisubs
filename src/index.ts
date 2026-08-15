@@ -5,7 +5,12 @@ export {
   type SubscriptionAccount,
   type SubscriptionAuthOptions,
 } from "./auth.js";
-export { defaultAiSubsDataDir, FileCredentialStore, MemoryCredentialStore } from "./store.js";
+export {
+  defaultAiSubsDataDir,
+  FileApiKeyStore,
+  FileCredentialStore,
+  MemoryCredentialStore,
+} from "./store.js";
 export { chatGptProvider, type ChatGptProviderOptions } from "./providers/chatgpt.js";
 export { claudeProvider, type ClaudeProviderOptions } from "./providers/claude.js";
 export { copilotProvider, type CopilotProviderOptions } from "./providers/copilot.js";

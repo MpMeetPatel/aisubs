@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { SubscriptionAuth } from "./auth.js";
-import { FileCredentialStore } from "./store.js";
+import { FileApiKeyStore, FileCredentialStore } from "./store.js";
 import type { ProviderAdapter } from "./types.js";
 
 describe("FileCredentialStore", () => {
@@ -65,5 +65,22 @@ describe("FileCredentialStore", () => {
 
     await expect(store.modify(key, () => credential)).resolves.toEqual(credential);
     await expect(store.read(key)).resolves.toEqual(credential);
+  });
+});
+
+describe("FileApiKeyStore", () => {
+  test("keeps one private key until it is regenerated", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aisubs-api-key-"));
+    const file = join(directory, "api-key");
+    const store = new FileApiKeyStore(file);
+
+    const created = await Promise.all(Array.from({ length: 8 }, () => store.readOrCreate()));
+    const first = created[0]!;
+    expect(new Set(created)).toEqual(new Set([first]));
+    expect(await store.readOrCreate()).toBe(first);
+    const replacement = await store.regenerate();
+    expect(replacement).not.toBe(first);
+    expect(await new FileApiKeyStore(file).readOrCreate()).toBe(replacement);
+    if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 });

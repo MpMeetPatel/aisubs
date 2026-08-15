@@ -8,7 +8,7 @@ import { claudeProvider } from "./providers/claude.js";
 import { copilotProvider } from "./providers/copilot.js";
 import { grokProvider } from "./providers/grok.js";
 import { openCodeGoProvider, openCodeZenProvider } from "./providers/opencode.js";
-import { defaultAiSubsDataDir, FileCredentialStore } from "./store.js";
+import { defaultAiSubsDataDir, FileApiKeyStore, FileCredentialStore } from "./store.js";
 
 const DEFAULT_DASHBOARD_PORT = 4319;
 
@@ -63,6 +63,7 @@ async function main(): Promise<void> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid port");
 
   const store = new FileCredentialStore(join(dataDirectory, "credentials.json"));
+  const apiKeys = new FileApiKeyStore(join(dataDirectory, "api-key"));
   const auth = createSubscriptionAuth({
     store,
     providers: [
@@ -74,14 +75,18 @@ async function main(): Promise<void> {
       openCodeZenProvider(),
     ],
   });
-  const dashboard = await createSubscriptionAuthDashboardServer({ auth, port });
+  const dashboard = await createSubscriptionAuthDashboardServer({
+    auth,
+    apiKey: await apiKeys.readOrCreate(),
+    regenerateApiKey: () => apiKeys.regenerate(),
+    port,
+  });
 
-  console.log(`AI Subs is running at ${dashboard.url}`);
-  console.log(`Credentials: ${store.file}`);
-  console.log(`Control API key: ${dashboard.apiKey}`);
-  console.log(`Dashboard link: ${dashboard.bootstrapUrl}`);
+  console.log(
+    `AI Subs is running at \u001b]8;;${dashboard.url}\u0007${dashboard.url}\u001b]8;;\u0007`,
+  );
   console.log("Press Ctrl+C to stop.");
-  if (shouldOpen) openBrowser(dashboard.bootstrapUrl);
+  if (shouldOpen) openBrowser(dashboard.url);
 
   let closing = false;
   const close = async (): Promise<void> => {

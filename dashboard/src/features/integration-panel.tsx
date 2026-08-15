@@ -6,6 +6,15 @@ import { CopyButton, panel } from "../components/ui";
 import { highlightCode, snippetLanguage } from "../components/syntax";
 
 export type ModelApi = "chat" | "responses" | "messages" | "google";
+type PackageManager = "nub" | "npm" | "pnpm" | "bun";
+
+function installCommand(command: string, manager: PackageManager): string {
+  const packages = command.replace(/^nub install /, "");
+  if (manager === "npm") return `npm install ${packages}`;
+  if (manager === "pnpm") return `pnpm add ${packages}`;
+  if (manager === "bun") return `bun add ${packages}`;
+  return command;
+}
 
 export function modelApi(provider: Provider, model?: ProviderModel): ModelApi {
   if (provider.id === "chatgpt") return "responses";
@@ -41,16 +50,27 @@ function snippets(
   model: string,
   selectedModel?: ProviderModel,
 ): Snippet[] {
-  const base = `${location.origin}/aisubs/${encodeURIComponent(provider.id)}/${encodeURIComponent(account)}`;
+  const base = `${location.origin}/aisubs/${encodeURIComponent(provider.id)}/${encodeURIComponent(account)}/v1`;
+  const anthropicSdkBase = base.slice(0, -3);
   const env = "AISUBS_API_KEY";
   const providerFactory = providerFactoryName(provider);
   if (provider.id === "claude") {
     return [
       {
+        id: "app",
+        label: "Any compatible app",
+        code: `Provider type: Anthropic compatible
+Base URL: ${base}
+API key: <copy from the AISubs dashboard>
+Model: ${model}
+Endpoint: POST /messages`,
+        note: "Paste these values into any app that supports a custom Anthropic API base URL. The app must support the Messages API.",
+      },
+      {
         id: "anthropic",
         label: "Anthropic SDK",
         install: "nub install @anthropic-ai/sdk",
-        code: `import Anthropic from "@anthropic-ai/sdk";\n\nconst client = new Anthropic({ baseURL: "${base}", apiKey: process.env.${env} });\nconst message = await client.messages.create({\n  model: "${model}",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nconsole.log(message.content);`,
+        code: `import Anthropic from "@anthropic-ai/sdk";\n\nconst client = new Anthropic({ baseURL: "${anthropicSdkBase}", apiKey: process.env.${env} });\nconst message = await client.messages.create({\n  model: "${model}",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nconsole.log(message.content);`,
         note: "AISubs accepts the SDK's local x-api-key header, removes it, and adds your Claude OAuth credential only for Anthropic.",
       },
       {
@@ -76,10 +96,20 @@ function snippets(
   if (api === "messages") {
     return [
       {
+        id: "app",
+        label: "Any compatible app",
+        code: `Provider type: Anthropic compatible
+Base URL: ${base}
+API key: <copy from the AISubs dashboard>
+Model: ${model}
+Endpoint: POST /messages`,
+        note: "Paste these values into an app that supports a custom Anthropic API base URL and the Messages API.",
+      },
+      {
         id: "anthropic",
         label: "Anthropic SDK",
         install: "nub install @anthropic-ai/sdk",
-        code: `import Anthropic from "@anthropic-ai/sdk";\n\nconst client = new Anthropic({ baseURL: "${base}", apiKey: process.env.${env} });\nconst message = await client.messages.create({\n  model: "${model}",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nconsole.log(message.content);`,
+        code: `import Anthropic from "@anthropic-ai/sdk";\n\nconst client = new Anthropic({ baseURL: "${anthropicSdkBase}", apiKey: process.env.${env} });\nconst message = await client.messages.create({\n  model: "${model}",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nconsole.log(message.content);`,
       },
       {
         id: "curl",
@@ -90,6 +120,16 @@ function snippets(
   }
   if (api === "google") {
     return [
+      {
+        id: "app",
+        label: "Any compatible app",
+        code: `Provider type: Google Generative Language
+Base URL: ${base}
+API key: <copy from the AISubs dashboard>
+Model: ${model}
+Endpoint: POST /models/${model}:generateContent`,
+        note: "Use these values only in an app that accepts a custom Google generateContent base URL.",
+      },
       {
         id: "curl",
         label: "Google generateContent · cURL",
@@ -111,6 +151,33 @@ function snippets(
     ? `import { createOpenAICompatible } from "@ai-sdk/openai-compatible";\nimport { streamText } from "ai";\n\nconst account = createOpenAICompatible({\n  name: "${provider.id}",\n  baseURL: "${base}",\n  apiKey: process.env.${env},\n});\n\nconst result = streamText({\n  model: account("${model}"),\n  prompt: "Hello from AISubs",\n});\n\nfor await (const text of result.textStream) process.stdout.write(text);`
     : `import { createOpenAICompatible } from "@ai-sdk/openai-compatible";\nimport { generateText } from "ai";\n\nconst account = createOpenAICompatible({\n  name: "${provider.id}",\n  baseURL: "${base}",\n  apiKey: process.env.${env},\n});\n\nconst { text } = await generateText({\n  model: account("${model}"),\n  prompt: "Hello from AISubs",\n});\n\nconsole.log(text);`;
   return [
+    {
+      id: "app",
+      label: "Any compatible app",
+      code: `Provider type: ${responses ? "OpenAI Responses" : "OpenAI compatible"}
+Base URL: ${base}
+API key: <copy from the AISubs dashboard>
+Model: ${model}
+Endpoint: POST /${path}`,
+      note: responses
+        ? chatGpt
+          ? "Use the Responses API natively. AISubs also adapts non-streaming, text-only Chat Completions for apps such as Handy."
+          : "Paste these values into an app that supports a custom OpenAI base URL and the Responses API. Chat-Completions-only apps cannot use a Responses-only model."
+        : "Paste these values into any app that supports a custom OpenAI-compatible base URL and Chat Completions.",
+    },
+    ...(chatGpt
+      ? [
+          {
+            id: "handy",
+            label: "Handy",
+            code: `Provider: Custom
+Base URL: ${base}
+API key: <copy from the AISubs dashboard>
+Model: ${model}`,
+            note: "Handy sends non-streaming Chat Completions. AISubs converts its text and JSON-schema requests to Responses for this ChatGPT account.",
+          },
+        ]
+      : []),
     {
       id: "aisubs",
       label: "AISubs SDK",
@@ -157,14 +224,16 @@ console.log({
           : `import { createOpenAI } from "@ai-sdk/openai";\nimport { generateText } from "ai";\n\nconst account = createOpenAI({\n  baseURL: "${base}",\n  apiKey: process.env.${env},\n});\n\nconst { text } = await generateText({\n  model: account.responses("${model}"),\n  prompt: "Hello from AISubs",\n});\n\nconsole.log(text);`
         : chatVercel,
     },
-    {
-      id: "tanstack",
-      label: "TanStack AI",
-      install: "nub install @tanstack/ai @tanstack/ai-openai",
-      code: responses
-        ? `import { chat } from "@tanstack/ai";\nimport { createOpenaiChat } from "@tanstack/ai-openai";\n\nconst stream = chat({\n  adapter: createOpenaiChat("${model}", process.env.${env}!, {\n    baseURL: "${base}",\n  }),\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nfor await (const event of stream) console.log(event);`
-        : `import { chat } from "@tanstack/ai";\nimport { openaiCompatible } from "@tanstack/ai-openai/compatible";\n\nconst account = openaiCompatible({\n  name: "${provider.id}",\n  baseURL: "${base}",\n  apiKey: process.env.${env}!,\n  models: ["${model}"],\n});\n\nconst stream = chat({\n  adapter: account("${model}"),\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nfor await (const event of stream) console.log(event);`,
-    },
+    ...(!responses
+      ? [
+          {
+            id: "tanstack",
+            label: "TanStack AI",
+            install: "nub install @tanstack/ai @tanstack/ai-openai",
+            code: `import { chat } from "@tanstack/ai";\nimport { openaiCompatible } from "@tanstack/ai-openai/compatible";\n\nconst account = openaiCompatible({\n  name: "${provider.id}",\n  baseURL: "${base}",\n  apiKey: process.env.${env}!,\n  models: ["${model}"],\n});\n\nconst stream = chat({\n  adapter: account("${model}"),\n  messages: [{ role: "user", content: "Hello from AISubs" }],\n});\n\nfor await (const event of stream) console.log(event);`,
+          },
+        ]
+      : []),
     {
       id: "openai",
       label: responses ? "OpenAI SDK" : "OpenAI-compatible SDK",
@@ -240,8 +309,9 @@ export function IntegrationPanel({
     [provider, account, model, selectedModel],
   );
   const [active, setActive] = useState(options[0]?.id ?? "");
+  const [packageManager, setPackageManager] = useState<PackageManager>("nub");
   const selected = options.find((item) => item.id === active) ?? options[0];
-  const base = `${location.origin}/aisubs/${encodeURIComponent(provider.id)}/${encodeURIComponent(account)}`;
+  const base = `${location.origin}/aisubs/${encodeURIComponent(provider.id)}/${encodeURIComponent(account)}/v1`;
   const direct = selected?.id === "aisubs";
   useEffect(() => {
     if (!options.some((item) => item.id === active)) setActive(options[0]?.id ?? "");
@@ -253,9 +323,9 @@ export function IntegrationPanel({
         <div className="flex items-start gap-2.5">
           <Terminal {...icon} />
           <span>
-            <h2 className="m-0 text-[13px] tracking-tight">AISubs SDK</h2>
+            <h2 className="m-0 text-[13px] tracking-tight">Use this account anywhere</h2>
             <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-300">
-              Manage subscription accounts directly in your product. No local HTTP server required.
+              Choose a model, then copy setup for an existing app, SDK, Python, or cURL.
             </p>
           </span>
         </div>
@@ -320,9 +390,9 @@ export function IntegrationPanel({
               "AISubs manages refreshes, safe metadata caching, and provider authorization in-process. The other tabs are for separate tools that use the optional localhost server."
             ) : (
               <>
-                Copy the control API key printed when AISubs starts, then run{" "}
-                <code>export AISUBS_API_KEY=&quot;...&quot;</code>. AISubs removes this key before
-                forwarding the request and adds the connected provider credential.
+                Reveal or regenerate the persistent key on the main dashboard, then set{" "}
+                <code>AISUBS_API_KEY</code>. AISubs removes it before forwarding the request and
+                adds the selected provider credential.
               </>
             )}
           </p>
@@ -345,10 +415,25 @@ export function IntegrationPanel({
         </div>
         {selected.install ? (
           <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5">
-            <code className="text-[11px] text-zinc-300">{selected.install}</code>
+            <div className="flex min-w-0 items-center gap-3">
+              <select
+                className="rounded border border-white/20 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200"
+                value={packageManager}
+                onChange={(event) => setPackageManager(event.target.value as PackageManager)}
+                aria-label="Package manager"
+              >
+                <option value="nub">Nub</option>
+                <option value="npm">npm</option>
+                <option value="pnpm">pnpm</option>
+                <option value="bun">Bun</option>
+              </select>
+              <code className="truncate text-[11px] text-zinc-300">
+                {installCommand(selected.install, packageManager)}
+              </code>
+            </div>
             <CopyButton
               className="border-white/20 bg-white/5 text-zinc-300 hover:border-white/30 hover:text-zinc-50 dark:border-white/20 dark:bg-white/5"
-              value={selected.install}
+              value={installCommand(selected.install, packageManager)}
             />
           </div>
         ) : null}

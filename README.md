@@ -1,166 +1,378 @@
 <table>
   <tr>
     <td><img src="./dashboard/public/aisubs-mark.svg" alt="AISubs icon" width="72"></td>
-    <td>
-      <h1>AISubs</h1>
-      <strong>Connect your AI subscriptions. Use them anywhere.</strong>
-    </td>
+    <td><h1>AISubs</h1><strong>Connect your AI subscriptions. Use them anywhere.</strong></td>
   </tr>
 </table>
 
-Connect once, then use your subscriptions through an SDK in your app, a local
-API, cURL, or any compatible tool.
+AISubs connects provider accounts once and exposes each account through a local,
+account-scoped API. Use it from the official OpenAI or Anthropic SDK, Vercel AI SDK,
+TanStack AI, Python, cURL, or an app that accepts a custom API base URL.
 
 <p align="center">
-  <img src="./public/aisubs-dashboard.png" alt="AISubs dashboard showing connected accounts" width="100%" />
+  <img src="./public/aisubs-dashboard.png" alt="AI Subs dashboard with provider connections and local API access" width="100%" />
 </p>
 
-<p align="center">
-  <img src="./public/aisubs-chatgpt-account.png" alt="AISubs ChatGPT account details showing plan, usage, and integration examples" width="33%" />
-  <img src="./public/aisubs-grok-account.png" alt="AISubs Grok account details showing plan, usage, and integration examples" width="33%" />
-  <img src="./public/aisubs-copilot-account.png" alt="AISubs GitHub Copilot account details showing credits and integration examples" width="33%" />
-</p>
-
-> AISubs keeps credentials on your computer. It collects no telemetry, analytics, request logs, or activity history.
+> Credentials, API keys, and requests remain on your computer. AISubs collects no
+> telemetry or analytics. The dashboard keeps up to 200 redacted account request logs in memory for debugging.
 
 ## Quick start
 
+AISubs requires [Node.js 24 or newer](https://nodejs.org/en/download/). Run it
+without adding it to a project:
+
 ```bash
-nubx aisubs dashboard       # Nub (recommended)
-npx aisubs dashboard        # npm
-pnpm exec aisubs dashboard  # pnpm
-bunx aisubs dashboard       # Bun
+nubx aisubs@latest dashboard       # Nub
+npx aisubs@latest dashboard        # npm
+pnpm dlx aisubs@latest dashboard   # pnpm
+bunx aisubs@latest dashboard       # Bun
 ```
 
-Click **Add account**, choose a provider, complete sign-in, and give the
-account a local name such as `personal` or `work`.
+The terminal prints only the local dashboard URL. Open it, click **Add account**,
+and complete the provider sign-in. The dashboard manages the persistent local API
+key: reveal it, copy it, or deliberately regenerate it there.
 
-## The idea
+The default URL is `http://127.0.0.1:4319`. Credentials and the API key are stored
+under `~/.aisubs` and reused on later starts.
 
-1. Connect a provider account and give it a local name, such as `personal`.
-2. Ask AISubs which models and request format that account supports.
-3. Send the provider-native request through that account.
+## Use an account from any compatible app
 
-One provider can have many accounts:
+Open an account in the dashboard and copy its base URL:
 
 ```text
-ChatGPT / personal
-ChatGPT / work
-Claude  / team
+http://127.0.0.1:4319/aisubs/PROVIDER/ACCOUNT/v1
 ```
 
-AISubs never silently switches accounts. Your application chooses the account
-for each request.
+Then configure the app with:
 
-## Providers
+```text
+API base URL: the account URL copied from AISubs
+API key:      the persistent key shown on the AISubs dashboard
+Model:        an exact model ID shown for that account
+```
 
-| Provider       | ID             | Sign-in                | Request format              |
-| -------------- | -------------- | ---------------------- | --------------------------- |
-| ChatGPT        | `chatgpt`      | Browser or device code | Responses                   |
-| Claude         | `claude`       | Browser                | Anthropic Messages          |
-| GitHub Copilot | `copilot`      | Device code            | Read from the model catalog |
-| Grok           | `grok`         | Device code            | Read from the model catalog |
-| OpenCode Go    | `opencode-go`  | API key                | Read from the model catalog |
-| OpenCode Zen   | `opencode-zen` | API key                | Read from the model catalog |
+For apps configured with environment variables:
 
-Provider model lists and protocols can change. Discover models at runtime and
-pin the AISubs version your application has tested.
+```bash
+export OPENAI_BASE_URL="http://127.0.0.1:4319/aisubs/grok/personal/v1"
+export OPENAI_API_KEY="aisubs_..."
+```
 
-## Fastest start: direct Node.js
+AISubs removes its local key before forwarding a request and adds only the
+selected account's provider credential.
 
-This is the simplest integration. It needs no local server and no AISubs API
-key.
+### Compatibility contract
 
-### 1. Create AISubs once
+AISubs preserves the provider's native request and response protocol. It also
+provides a focused, non-streaming text Chat Completions adapter for ChatGPT
+accounts so apps such as [Handy](https://github.com/cjpais/Handy) can use them.
+
+| Provider/model protocol            | Base URL                    | Supported request path                  |
+| ---------------------------------- | --------------------------- | --------------------------------------- |
+| OpenAI Responses                   | Account URL ending in `/v1` | `POST /responses`                       |
+| OpenAI-compatible Chat Completions | Account URL ending in `/v1` | `POST /chat/completions`                |
+| Anthropic Messages                 | Account URL ending in `/v1` | `POST /messages`                        |
+| Google generateContent             | Account URL ending in `/v1` | `POST /models/MODEL_ID:generateContent` |
+| Model discovery                    | Account URL ending in `/v1` | `GET /models`                           |
+
+Embeddings are intentionally not exposed. The ChatGPT compatibility adapter
+supports text messages and JSON-schema response formats; tools, images, audio,
+and streaming Chat Completions remain native-Responses-only features.
+
+### Handy
+
+Choose **Custom** in Handy and copy these values from the ChatGPT account page:
+
+```text
+Base URL: http://127.0.0.1:4319/aisubs/chatgpt/ACCOUNT/v1
+API key:  the persistent key shown on the AISubs dashboard
+Model:    an exact model ID shown for the account
+```
+
+Handy sends `POST /chat/completions` with streaming disabled. AISubs translates
+that request to ChatGPT Responses and returns the `choices[0].message.content`
+shape Handy reads.
+
+## SDK examples
+
+Set the key once for the shell running your client:
+
+```bash
+export AISUBS_API_KEY="aisubs_..."
+```
+
+<details>
+<summary><strong>Official OpenAI JavaScript SDK — Responses and Chat Completions</strong></summary>
+
+Install:
+
+```bash
+nub install openai
+npm install openai
+pnpm add openai
+bun add openai
+```
 
 ```js
-// subscriptions.js
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://127.0.0.1:4319/aisubs/chatgpt/personal/v1",
+  apiKey: process.env.AISUBS_API_KEY,
+});
+
+const stream = await client.responses.create({
+  model: "MODEL_ID_FROM_DASHBOARD",
+  input: "Hello from AISubs",
+  store: false,
+  stream: true,
+});
+
+for await (const event of stream) console.log(event);
+```
+
+Chat Completions uses the same client with an account/model that reports that
+endpoint:
+
+```js
+const response = await client.chat.completions.create({
+  model: "MODEL_ID_FROM_DASHBOARD",
+  messages: [{ role: "user", content: "Hello from AISubs" }],
+});
+
+console.log(response.choices[0]?.message.content);
+```
+
+</details>
+
+<details>
+<summary><strong>Official Anthropic JavaScript SDK</strong></summary>
+
+Install:
+
+```bash
+nub install @anthropic-ai/sdk
+npm install @anthropic-ai/sdk
+pnpm add @anthropic-ai/sdk
+bun add @anthropic-ai/sdk
+```
+
+```js
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  baseURL: "http://127.0.0.1:4319/aisubs/claude/team",
+  apiKey: process.env.AISUBS_API_KEY,
+});
+
+const message = await client.messages.create({
+  model: "MODEL_ID_FROM_DASHBOARD",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello from AISubs" }],
+});
+
+console.log(message.content);
+```
+
+</details>
+
+<details>
+<summary><strong>Vercel AI SDK</strong></summary>
+
+For a Responses model:
+
+```bash
+nub install ai @ai-sdk/openai
+npm install ai @ai-sdk/openai
+pnpm add ai @ai-sdk/openai
+bun add ai @ai-sdk/openai
+```
+
+```js
+import { createOpenAI } from "@ai-sdk/openai";
+import { streamText } from "ai";
+
+const aisubs = createOpenAI({
+  baseURL: "http://127.0.0.1:4319/aisubs/chatgpt/personal/v1",
+  apiKey: process.env.AISUBS_API_KEY,
+});
+
+const result = streamText({
+  model: aisubs.responses("MODEL_ID_FROM_DASHBOARD"),
+  prompt: "Hello from AISubs",
+  providerOptions: { openai: { store: false } },
+});
+
+for await (const text of result.textStream) process.stdout.write(text);
+```
+
+For Chat Completions, install `@ai-sdk/openai-compatible`, create the provider
+with the same account base URL, and select the model with `provider("MODEL_ID")`.
+
+</details>
+
+<details>
+<summary><strong>TanStack AI — Chat Completions</strong></summary>
+
+TanStack's generic compatibility adapter targets Chat Completions. Use it only
+for a model that lists `chat/completions`.
+
+```bash
+nub install @tanstack/ai @tanstack/ai-openai
+npm install @tanstack/ai @tanstack/ai-openai
+pnpm add @tanstack/ai @tanstack/ai-openai
+bun add @tanstack/ai @tanstack/ai-openai
+```
+
+```ts
+import { chat } from "@tanstack/ai";
+import { openaiCompatible } from "@tanstack/ai-openai/compatible";
+
+const aisubs = openaiCompatible({
+  name: "aisubs",
+  baseURL: "http://127.0.0.1:4319/aisubs/grok/personal/v1",
+  apiKey: process.env.AISUBS_API_KEY!,
+  models: ["MODEL_ID_FROM_DASHBOARD"],
+});
+
+const stream = chat({
+  adapter: aisubs("MODEL_ID_FROM_DASHBOARD"),
+  messages: [{ role: "user", content: "Hello from AISubs" }],
+});
+
+for await (const event of stream) console.log(event);
+```
+
+</details>
+
+<details>
+<summary><strong>Python OpenAI SDK</strong></summary>
+
+```bash
+python -m pip install openai
+```
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:4319/aisubs/grok/personal/v1",
+    api_key=os.environ["AISUBS_API_KEY"],
+)
+
+response = client.chat.completions.create(
+    model="MODEL_ID_FROM_DASHBOARD",
+    messages=[{"role": "user", "content": "Hello from AISubs"}],
+)
+print(response.choices[0].message.content)
+```
+
+</details>
+
+<details>
+<summary><strong>cURL — Responses, Chat Completions, Anthropic, and Google</strong></summary>
+
+```bash
+curl "http://127.0.0.1:4319/aisubs/chatgpt/personal/v1/responses" \
+  -H "Authorization: Bearer $AISUBS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"MODEL_ID_FROM_DASHBOARD","store":false,"input":"Hello"}'
+```
+
+Chat Completions:
+
+```bash
+curl "http://127.0.0.1:4319/aisubs/grok/personal/v1/chat/completions" \
+  -H "Authorization: Bearer $AISUBS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"MODEL_ID_FROM_DASHBOARD","messages":[{"role":"user","content":"Hello from AISubs"}]}'
+```
+
+Anthropic Messages:
+
+```bash
+curl "http://127.0.0.1:4319/aisubs/claude/team/v1/messages" \
+  -H "x-api-key: $AISUBS_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"MODEL_ID_FROM_DASHBOARD","max_tokens":1024,"messages":[{"role":"user","content":"Hello from AISubs"}]}'
+```
+
+Google `generateContent`:
+
+```bash
+curl "http://127.0.0.1:4319/aisubs/opencode-zen/lab/v1/models/MODEL_ID_FROM_DASHBOARD:generateContent" \
+  -H "Authorization: Bearer $AISUBS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"contents":[{"role":"user","parts":[{"text":"Hello from AISubs"}]}]}'
+```
+
+</details>
+
+## Direct AISubs SDK
+
+Use the in-process SDK when AISubs is part of your trusted Node.js backend. It
+needs no local server or AISubs API key.
+
+Install the package in a project:
+
+```bash
+nub install aisubs
+npm install aisubs
+pnpm add aisubs
+bun add aisubs
+```
+
+```js
 import { chatGptProvider, createSubscriptionAuth } from "aisubs";
 
-export const subscriptions = createSubscriptionAuth({
-  providers: [chatGptProvider()],
-});
-```
-
-By default, credentials are stored at `~/.aisubs/credentials.json`.
-
-Keep this object in trusted backend code. Do not send it to a browser.
-
-### 2. Connect an account
-
-```js
-import { subscriptions } from "./subscriptions.js";
-
+const subscriptions = createSubscriptionAuth({ providers: [chatGptProvider()] });
 const account = subscriptions.account("chatgpt", "personal");
 
 if (!(await account.status()).authenticated) {
   const login = await account.signIn();
-
-  if (login.prompt.mode === "browser") {
-    console.log("Open:", login.prompt.authorizationUri);
-  }
-  if (login.prompt.mode === "device") {
-    console.log("Open:", login.prompt.verificationUri);
-    console.log("Code:", login.prompt.userCode);
-  }
-
+  console.log(login.prompt);
   await login.wait();
 }
-```
 
-### 3. Discover a model and send a request
-
-This example selects the first available ChatGPT model, so it does not depend
-on a model ID that may change:
-
-```js
 const catalog = await account.getModels();
-if (!catalog) throw new Error("This provider does not expose models");
-console.log(
-  "Available model IDs:",
-  catalog.models.map((item) => item.id),
-);
-
-const modelId = catalog.models.find((item) => item.selectable !== false)?.id;
-if (!modelId) throw new Error("No ChatGPT model is available");
-console.log("Using model:", modelId);
+const model = catalog?.models.find((item) => item.selectable !== false)?.id;
+if (!model) throw new Error("No selectable model is available");
 
 const response = await account.proxy("responses", {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    model: modelId,
-    store: false,
-    stream: true,
-    input: "Hello from AISubs",
-  }),
+  body: JSON.stringify({ model, input: "Hello", store: false, stream: true }),
 });
 
 if (!response.ok) throw new Error(await response.text());
-if (response.body) {
-  for await (const chunk of response.body) process.stdout.write(Buffer.from(chunk));
-}
+for await (const chunk of response.body ?? []) process.stdout.write(Buffer.from(chunk));
 ```
 
-Here, `modelId` is the exact ID returned by `account.getModels()`. Model IDs
-belong to the connected provider account and can change, so list them first
-instead of copying a fixed ID from documentation.
+Available provider factories are `chatGptProvider()`, `claudeProvider()`,
+`copilotProvider()`, `grokProvider()`, `openCodeGoProvider()`, and
+`openCodeZenProvider()`.
 
-`store: false` is a request option for the Responses API; it is unrelated to
-AISubs credential storage and keeps response storage disabled. `stream: true`
-asks for incremental output, which is why the example reads `response.body` in
-chunks. Keep both options for ChatGPT subscription Responses requests.
+Useful account methods:
 
-AISubs refreshes expired credentials automatically and retries a provider `401`
-once.
+| Method               | Purpose                                                |
+| -------------------- | ------------------------------------------------------ |
+| `status()`           | Check whether the account is connected                 |
+| `signIn(options?)`   | Start browser, device-code, or API-key sign-in         |
+| `signOut()`          | Remove the account's locally stored credential         |
+| `getModels()`        | Read the current provider model catalog                |
+| `getUsage()`         | Read current provider usage when available             |
+| `details()`          | Read safe identity, credential, usage, and model data  |
+| `fetch(url, init?)`  | Send an authorized request to an allowed provider host |
+| `proxy(path, init?)` | Send a provider-native request without handling tokens |
 
 <details>
-<summary><strong>Use another provider</strong></summary>
-
-Add its provider factory when creating AISubs:
+<summary><strong>Configure every provider and custom credential storage</strong></summary>
 
 ```js
 import {
+  FileCredentialStore,
   chatGptProvider,
   claudeProvider,
   copilotProvider,
@@ -171,6 +383,7 @@ import {
 } from "aisubs";
 
 const subscriptions = createSubscriptionAuth({
+  store: new FileCredentialStore("./data/aisubs-credentials.json"),
   providers: [
     chatGptProvider(),
     claudeProvider(),
@@ -182,20 +395,12 @@ const subscriptions = createSubscriptionAuth({
 });
 ```
 
-To use a different file, pass a custom store:
+Without a custom store, credentials are saved to
+`~/.aisubs/credentials.json`. Select an account with its provider ID and a
+local account name:
 
 ```js
-import { chatGptProvider, createSubscriptionAuth, FileCredentialStore } from "aisubs";
-
-const subscriptions = createSubscriptionAuth({
-  store: new FileCredentialStore("./data/aisubs-credentials.json"),
-  providers: [chatGptProvider()],
-});
-```
-
-Then select the account by provider ID:
-
-```js
+const chatgpt = subscriptions.account("chatgpt", "personal");
 const claude = subscriptions.account("claude", "team");
 const copilot = subscriptions.account("copilot", "github");
 const grok = subscriptions.account("grok", "personal");
@@ -203,35 +408,45 @@ const go = subscriptions.account("opencode-go", "team");
 const zen = subscriptions.account("opencode-zen", "lab");
 ```
 
-OpenCode uses an API key:
+Account names are 1–128 characters and cannot contain control characters.
+
+</details>
+
+<details>
+<summary><strong>Browser, device-code, and API-key sign-in</strong></summary>
+
+The default ChatGPT flow opens a browser. On a headless machine, request its
+device-code flow explicitly:
+
+```js
+const login = await chatgpt.signIn({ mode: "device" });
+console.log(login.prompt);
+await login.wait();
+```
+
+Copilot uses device-code sign-in and can target a supported GitHub Enterprise
+Cloud domain:
+
+```js
+const login = await copilot.signIn({ enterpriseDomain: "company.ghe.com" });
+console.log(login.prompt);
+await login.wait();
+```
+
+OpenCode Go and Zen use API keys:
 
 ```js
 const login = await go.signIn({ apiKey: process.env.OPENCODE_API_KEY });
 await login.wait();
 ```
 
-For ChatGPT on a headless machine, use `signIn({ mode: "device" })`. Copilot
-also accepts `enterpriseDomain` for a supported GitHub Enterprise Cloud domain.
-
-Provider request paths are:
-
-| Model catalog endpoint | `account.proxy()` path            |
-| ---------------------- | --------------------------------- |
-| `responses`            | `responses`                       |
-| `chat/completions`     | `chat/completions`                |
-| `messages`             | `messages`                        |
-| `models/MODEL_ID`      | `models/MODEL_ID:generateContent` |
-
-Use `account.getModels()` first for Copilot, Grok, and OpenCode because one
-provider can expose more than one request format.
-
 </details>
 
 <details>
-<summary><strong>Read account, usage, and model information</strong></summary>
+<summary><strong>Inspect account details and switch between accounts</strong></summary>
 
 ```js
-const details = await account.details();
+const details = await chatgpt.details();
 
 console.log(details.session); // connection state and safe account identity
 console.log(details.credential); // expiry and refresh state, never token values
@@ -239,27 +454,11 @@ console.log(details.usage); // limits and reset information, or null
 console.log(details.models); // available models, or null
 ```
 
-Useful methods:
-
-| Method                       | Purpose                                                |
-| ---------------------------- | ------------------------------------------------------ |
-| `account.status()`           | Check whether the account is connected                 |
-| `account.signIn(options?)`   | Start a browser, device-code, or API-key login         |
-| `account.signOut()`          | Remove this account's locally stored credentials       |
-| `account.getModels()`        | Get the provider's current model catalog               |
-| `account.getUsage()`         | Get current plan usage, if supported                   |
-| `account.details()`          | Get safe session, credential, usage, and model data    |
-| `account.fetch(url, init?)`  | Make an authorized request to an allowed provider URL  |
-| `account.proxy(path, init?)` | Make a provider-native request without handling tokens |
-
 `details()`, `getUsage()`, and `getModels()` never return access or refresh
-tokens. `getAccessToken()` exists for advanced backend integrations; keep its
-result secret and prefer `fetch()` or `proxy()` when possible.
+tokens. Prefer `fetch()` or `proxy()` over handling a token directly.
 
-</details>
-
-<details>
-<summary><strong>Use multiple accounts</strong></summary>
+Each named account keeps separate credentials, refresh state, usage, and model
+data, so selection can happen at request time:
 
 ```js
 const personal = subscriptions.account("chatgpt", "personal");
@@ -269,275 +468,59 @@ const selected = user.isWorkAccount ? work : personal;
 const response = await selected.proxy("responses", requestOptions);
 ```
 
-Account names are 1–128 characters and cannot contain control characters.
-Each account has separate credentials, refresh state, usage, and model data.
-
 </details>
 
-## Dashboard
-
-### Requirements and installation
-
-- [Node.js 24 or newer](https://nodejs.org/en/download/).
-- A terminal and a browser for provider sign-in.
-- [Nub 0.6 or newer](https://nubjs.com/docs/install) is recommended. It is not
-  required; [pnpm](https://pnpm.io/installation),
-  [npm](https://docs.npmjs.com/cli/install/), and
-  [Bun](https://bun.sh/docs/installation) also work.
-- An API key for OpenCode Go or OpenCode Zen; the other providers use browser
-  or device-code sign-in.
-
-Install AISubs in your project:
-
-```bash
-nub install aisubs       # Nub (recommended)
-npm install aisubs       # npm
-pnpm add aisubs          # pnpm
-bun add aisubs           # Bun
-```
-
-Use the dashboard when you want to connect accounts without writing login UI:
-
-```bash
-nubx aisubs dashboard       # Nub (recommended)
-npx aisubs dashboard        # npm
-pnpm exec aisubs dashboard  # pnpm
-bunx aisubs dashboard       # Bun
-```
-
-Then click **Add account**, choose a provider, finish sign-in, and choose a
-local account name. The dashboard shows safe account details, usage, models,
-and copy-ready integration examples.
-
-By default, AISubs uses Node.js 24 or newer, listens on
-`127.0.0.1:4319`, and stores credentials at `~/.aisubs/credentials.json`.
-
-To use another directory, choose an available port, or prevent the browser
-from opening:
-
-```bash
-nubx aisubs dashboard \
-  --data-dir ./data/aisubs \
-  --port 0 \
-  --no-open
-```
-
-Use the equivalent `npx`, `pnpm exec`, or `bunx` command if you use npm, pnpm,
-or Bun.
-
-The dashboard prints the secure link when `--no-open` is used. Credentials stay
-on your computer; do not commit the data directory or expose the dashboard to
-the network.
-
-Use `AISUBS_DATA_DIR` or `--data-dir` to choose another data directory. Use
-`--port 0` for an available port and `--no-open` to print the secure link
-without opening a browser.
-
-## Local HTTP bridge
-
-Use the bridge for an existing SDK, Python, cURL, or another program that
-cannot import AISubs:
-
-```bash
-nubx aisubs dashboard       # Nub (recommended)
-npx aisubs dashboard        # npm
-pnpm exec aisubs dashboard  # pnpm
-bunx aisubs dashboard       # Bun
-export AISUBS_API_KEY="the-control-key-printed-by-aisubs"
-```
-
-The base URL chooses the provider and account. Append the provider's request
-path shown by `getModels()` or the dashboard:
-
-```text
-http://127.0.0.1:4319/aisubs/chatgpt/personal/responses
-http://127.0.0.1:4319/aisubs/claude/team/messages
-http://127.0.0.1:4319/aisubs/grok/personal/chat/completions
-```
-
-The account name is URL-decoded by AISubs, so URL-encode names containing
-spaces or other URL characters. AISubs removes the control key before sending
-the request to a provider.
-
 <details>
-<summary><strong>Vercel AI SDK</strong></summary>
+<summary><strong>Run the local HTTP server from Node.js</strong></summary>
 
-For a `responses` model:
-
-```bash
-nub install ai @ai-sdk/openai
-```
+This is the programmatic equivalent of `aisubs dashboard`. The API key is
+created once and reused across restarts; delete or regenerate the key file only
+when clients should receive a new key.
 
 ```js
-import { createOpenAI } from "@ai-sdk/openai";
-import { streamText } from "ai";
-
-const provider = createOpenAI({
-  baseURL: "http://127.0.0.1:4319/aisubs/chatgpt/personal",
-  apiKey: process.env.AISUBS_API_KEY,
-});
-
-const result = streamText({
-  model: provider.responses("MODEL_ID"),
-  prompt: "Hello",
-  providerOptions: { openai: { store: false } },
-});
-
-for await (const text of result.textStream) process.stdout.write(text);
-```
-
-For `chat/completions`, use `@ai-sdk/openai-compatible`. For `messages`, use
-`@ai-sdk/anthropic`. For OpenCode Zen Gemini, use the model-specific
-`models/MODEL_ID:generateContent` URL shown in the dashboard.
-
-</details>
-
-<details>
-<summary><strong>TanStack AI</strong></summary>
-
-TanStack AI can use AISubs through its OpenAI-compatible adapter:
-
-```bash
-nub install @tanstack/ai @tanstack/ai-openai       # Nub (recommended)
-npm install @tanstack/ai @tanstack/ai-openai       # npm
-pnpm add @tanstack/ai @tanstack/ai-openai          # pnpm
-bun add @tanstack/ai @tanstack/ai-openai           # Bun
-```
-
-```ts
-import { chat } from "@tanstack/ai";
-import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
-
-const stream = chat({
-  adapter: openaiCompatibleText("MODEL_ID", {
-    baseURL: "http://127.0.0.1:4319/aisubs/grok/personal",
-    apiKey: process.env.AISUBS_API_KEY!,
-  }),
-  messages: [{ role: "user", content: "Hello" }],
-});
-
-for await (const chunk of stream) {
-  if (chunk.type === "TEXT_MESSAGE_CONTENT") process.stdout.write(chunk.delta);
-}
-```
-
-Use the equivalent `npm install`, `pnpm add`, or `bun add` command if you use
-another package manager. Replace the provider, account, and model with values
-from your dashboard.
-
-</details>
-
-<details>
-<summary><strong>OpenAI, Anthropic, Python, or cURL</strong></summary>
-
-OpenAI Responses:
-
-```bash
-nub install openai
-```
-
-```js
-import OpenAI from "openai";
-
-const client = new OpenAI({
-  baseURL: "http://127.0.0.1:4319/aisubs/chatgpt/personal",
-  apiKey: process.env.AISUBS_API_KEY,
-});
-
-const stream = await client.responses.create({
-  model: "MODEL_ID",
-  store: false,
-  stream: true,
-  input: "Hello",
-});
-
-for await (const event of stream) console.log(event);
-```
-
-Anthropic Messages uses `@anthropic-ai/sdk` with this base URL:
-
-```text
-http://127.0.0.1:4319/aisubs/claude/team
-```
-
-Chat Completions with LiteLLM:
-
-```bash
-pip install litellm
-```
-
-```python
-import os
-from litellm import completion
-
-response = completion(
-    model="openai/MODEL_ID",
-    api_base="http://127.0.0.1:4319/aisubs/grok/personal",
-    api_key=os.environ["AISUBS_API_KEY"],
-    messages=[{"role": "user", "content": "Hello"}],
-    stream=True,
-)
-
-for event in response:
-    print(event)
-```
-
-cURL:
-
-```bash
-curl "http://127.0.0.1:4319/aisubs/chatgpt/personal/responses" \
-  -H "Authorization: Bearer $AISUBS_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"MODEL_ID","store":false,"stream":true,"input":"Hello"}'
-```
-
-For Messages, use `x-api-key: $AISUBS_API_KEY` and
-`anthropic-version: 2023-06-01`.
-
-</details>
-
-<details>
-<summary><strong>Run a server from Node.js</strong></summary>
-
-HTTP bridge without the dashboard:
-
-```js
-import { randomBytes } from "node:crypto";
-import { chatGptProvider, createSubscriptionAuth, FileCredentialStore } from "aisubs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import {
+  FileApiKeyStore,
+  FileCredentialStore,
+  chatGptProvider,
+  claudeProvider,
+  createSubscriptionAuth,
+} from "aisubs";
 import { createSubscriptionAuthServer } from "aisubs/http";
 
+const directory = join(homedir(), ".aisubs");
+const apiKey = await new FileApiKeyStore(join(directory, "api-key")).readOrCreate();
 const auth = createSubscriptionAuth({
-  store: new FileCredentialStore("./data/aisubs-credentials.json"),
-  providers: [chatGptProvider()],
+  store: new FileCredentialStore(join(directory, "credentials.json")),
+  providers: [chatGptProvider(), claudeProvider()],
 });
 
-const server = await createSubscriptionAuthServer({
-  auth,
-  apiKey: randomBytes(24).toString("hex"),
-  port: 4319,
-});
-
-console.log(server.url);
-// await server.close();
+const server = await createSubscriptionAuthServer({ auth, apiKey, port: 4319 });
+console.log(`AISubs API: ${server.url}`);
 ```
 
-Dashboard inside a Node.js application:
-
-```js
-import { createSubscriptionAuthDashboardServer } from "aisubs/dashboard";
-
-const dashboard = await createSubscriptionAuthDashboardServer({ auth });
-console.log(dashboard.bootstrapUrl);
-// await dashboard.close();
-```
-
-Both servers bind only to localhost. The programmatic HTTP server requires its
-API key; the dashboard also provides a one-time browser link.
+A runnable version is available in [`examples/server.mjs`](./examples/server.mjs).
 
 </details>
 
-<details>
-<summary><strong>Local HTTP API</strong></summary>
+## Dashboard options
+
+```text
+aisubs dashboard [options]
+
+--data-dir <path>  State directory (default: ~/.aisubs)
+--port <number>    Local port (default: 4319; 0 chooses an available port)
+--no-open          Do not open the browser
+--help             Show help
+```
+
+`AISUBS_DATA_DIR` also changes the state directory. The built-in server binds
+only to localhost.
+
+## Local management API
+
+These routes are for the dashboard and advanced integrations:
 
 ```text
 GET    /health
@@ -546,84 +529,57 @@ GET    /v1/auth
 GET    /v1/auth/:provider
 GET    /v1/auth/:provider/accounts
 POST   /v1/auth/:provider/login
+DELETE /v1/auth/:provider?account=work
 GET    /v1/logins/:loginId
 DELETE /v1/logins/:loginId
-GET    /v1/auth/:provider/details?account=work
-DELETE /v1/auth/:provider?account=work
-POST   /v1/fetch/:provider
 GET    /v1/usage/:provider?account=work
 GET    /v1/models/:provider?account=work
-*      /aisubs/:provider/:account/*
+GET    /v1/api-key                 # dashboard session only
+POST   /v1/api-key/regenerate      # dashboard session only
+*      /aisubs/:provider/:account/v1/*
 ```
 
-The dashboard's `/bootstrap` link is one-time. Other routes require the
-control API key or dashboard session cookie. Login responses return an attempt
-ID; poll `/v1/logins/:loginId` until it is complete, failed, or cancelled.
+The provider and account routes require `Authorization: Bearer AISUBS_API_KEY`
+or `x-api-key: AISUBS_API_KEY`. Regenerating the key immediately invalidates the
+old key.
 
-</details>
+## Storage and security
 
-<details>
-<summary><strong>Storage and security</strong></summary>
+- Credentials: `~/.aisubs/credentials.json`.
+- Persistent local API key: `~/.aisubs/api-key`.
+- State directories and files use private permissions where the platform supports them.
+- Provider credentials are attached only after provider-host allowlist validation.
+- Local authorization, cookie, origin, and proxy headers are never forwarded.
+- Account and model APIs never return provider access or refresh tokens.
+- Keep AISubs on localhost and never put its API key in browser-delivered code.
 
-- Default credentials: `~/.aisubs/credentials.json`.
-- Override the directory with `AISUBS_DATA_DIR` or `--data-dir`.
-- `FileCredentialStore` creates private directories/files and uses file locks.
-- `MemoryCredentialStore` is available for tests and temporary processes.
-- Usage is cached for 15 seconds; model catalogs are cached for five minutes.
-- Sign-in, refresh, and sign-out clear the affected metadata cache.
-- Provider credentials are added only after host allowlist validation.
-- Local auth and control-key headers are removed before forwarding.
-- Account APIs return safe summaries, never token values.
-- Never expose provider credentials or `AISUBS_API_KEY` in browser code.
+## Development
 
-</details>
-
-<details>
-<summary><strong>Local development</strong></summary>
-
-From the package directory, run:
+From the package directory:
 
 ```bash
-nub run dev
-```
-
-Equivalent commands are `pnpm dev`, `npm run dev`, and `bun run dev`. Nub is
-recommended, but it is not required. The command builds the package once,
-watches backend and dashboard changes, and opens the local dashboard. Pass
-`-- --no-open` to keep the browser closed.
-
-</details>
-
-<details>
-<summary><strong>Maintainer pre-publish check</strong></summary>
-
-```bash
+nub install
 nub run check
-nub pack --dry-run
 ```
 
-With another package manager, use `pnpm check` / `pnpm pack`,
-`npm run check` / `npm pack --dry-run`, or `bun run check` / `bun pm pack`.
+Package-manager equivalents:
 
-Confirm that the package contains `dist`, `examples`, `public`, `README.md`,
-`LICENSE`, and the README logo asset. Test at least one real account for every
-provider your release claims to support.
+```bash
+npm install && npm run check
+pnpm install && pnpm run check
+bun install && bun run check
+```
 
-Runnable examples:
+For the watch dashboard use `nub run dev`, `npm run dev`, `pnpm run dev`, or
+`bun run dev`. Before publishing, also inspect the package with `nub pack --dry-run`,
+`npm pack --dry-run`, `pnpm pack --dry-run`, or `bun pm pack --dry-run`.
 
-- [`examples/direct.mjs`](./examples/direct.mjs)
-- [`examples/server.mjs`](./examples/server.mjs)
+## Provider terms
 
-</details>
-
-## Contributing and bug reports
-
-Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening an issue or
-pull request. To report a reproducible bug, use the
-[Bug report form](./.github/ISSUE_TEMPLATE/bug_report.yml) and include the
-version, environment, steps to reproduce, expected and actual behavior, and
-sanitized error output where relevant.
+Provider subscriptions, OAuth clients, and model access are governed by each
+provider's terms and may change. Use accounts you are authorized to use, discover
+models at runtime, and pin the AISubs version your integration has tested.
 
 ## License
 
-AISubs is licensed under the [MIT License](./LICENSE).
+[MIT](./LICENSE)

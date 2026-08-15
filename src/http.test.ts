@@ -152,6 +152,113 @@ describe("subscription auth HTTP server", () => {
     expect(headers.get("x-client-feature")).toBe("kept");
   });
 
+  test("provides an account-scoped OpenAI-compatible v1 surface without embeddings", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
+    await (await auth.account("test", "work").signIn()).wait();
+    const proxy = vi.spyOn(auth, "proxy").mockResolvedValue(new Response(null, { status: 204 }));
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+    const headers = { authorization: "Bearer secret" };
+
+    const models = await fetch(`${running.url}/aisubs/test/work/v1/models`, { headers });
+    await expect(models.json()).resolves.toEqual({
+      object: "list",
+      data: [{ id: "test-model", object: "model", owned_by: "test" }],
+    });
+    const response = await fetch(`${running.url}/aisubs/test/work/v1/chat/completions`, {
+      method: "POST",
+      headers,
+    });
+    expect(response.status).toBe(204);
+    expect(proxy).toHaveBeenCalledWith("test", "work", "chat/completions", expect.any(Object));
+    const embeddings = await fetch(`${running.url}/aisubs/test/work/v1/embeddings`, {
+      method: "POST",
+      headers,
+    });
+    expect(embeddings.status).toBe(404);
+  });
+
+  test("adapts Handy-style Chat Completions to ChatGPT Responses", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
+    const proxy = vi
+      .spyOn(auth, "proxy")
+      .mockResolvedValue(
+        new Response(
+          [
+            'data: {"type":"response.output_text.delta","delta":"Polished "}',
+            'data: {"type":"response.output_text.delta","delta":"transcript"}',
+            'data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+        ),
+      );
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+
+    const response = await fetch(`${running.url}/aisubs/chatgpt/work/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: false,
+        reasoning_effort: "none",
+        messages: [
+          { role: "system", content: "Improve the transcription." },
+          { role: "user", content: "raw transcript" },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "transcription_output", strict: true, schema: { type: "object" } },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: "resp_1",
+      model: "gpt-test",
+      choices: [{ message: { role: "assistant", content: "Polished transcript" } }],
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+    });
+    expect(proxy).toHaveBeenCalledWith("chatgpt", "work", "responses", expect.any(Object));
+    const upstream = JSON.parse(String(proxy.mock.calls[0]?.[3]?.body)) as Record<string, unknown>;
+    expect(upstream).toMatchObject({
+      model: "gpt-test",
+      store: false,
+      stream: true,
+      instructions: "Improve the transcription.",
+      input: [{ role: "user", content: [{ type: "input_text", text: "raw transcript" }] }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "transcription_output",
+          strict: true,
+          schema: { type: "object" },
+        },
+      },
+    });
+  });
+
+  test("passes native ChatGPT Responses through unchanged", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
+    const proxy = vi.spyOn(auth, "proxy").mockResolvedValue(new Response(null, { status: 204 }));
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+    const body = JSON.stringify({ model: "gpt-test", input: "hello", stream: true });
+
+    const response = await fetch(`${running.url}/aisubs/chatgpt/work/v1/responses`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body,
+    });
+
+    expect(response.status).toBe(204);
+    expect(proxy).toHaveBeenCalledWith(
+      "chatgpt",
+      "work",
+      "responses",
+      expect.objectContaining({ body: Buffer.from(body) }),
+    );
+  });
+
   test("lets standalone clients configure the buffered proxy body limit", async () => {
     const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     vi.spyOn(auth, "proxy").mockResolvedValue(new Response(null, { status: 204 }));

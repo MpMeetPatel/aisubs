@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -53,8 +54,8 @@ describe("subscription auth dashboard", () => {
     const auth = new SubscriptionAuth(store, [provider]);
     running = await createSubscriptionAuthDashboardServer({ auth });
 
-    const bootstrap = await fetch(running.bootstrapUrl, { redirect: "manual" });
-    const sessionCookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0];
+    const dashboard = await fetch(running.url);
+    const sessionCookie = dashboard.headers.get("set-cookie")?.split(";", 1)[0];
     expect(sessionCookie).toBeTruthy();
 
     const response = await fetch(`${running.url}/v1/auth/test/login`, {
@@ -69,6 +70,135 @@ describe("subscription auth dashboard", () => {
     expect(response.status).toBe(202);
   });
 
+  test("rejects DNS-rebinding host headers", async () => {
+    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    running = await createSubscriptionAuthDashboardServer({ auth });
+
+    const response = await new Promise<{ status: number; cookie: string[] | undefined }>(
+      (resolve, reject) => {
+        const call = request(running!.url, { headers: { host: "attacker.example" } }, (result) => {
+          result.resume();
+          resolve({ status: result.statusCode ?? 0, cookie: result.headers["set-cookie"] });
+        });
+        call.on("error", reject);
+        call.end();
+      },
+    );
+    expect(response.status).toBe(421);
+    expect(response.cookie).toBeUndefined();
+  });
+
+  test("shows and regenerates the API key from the dashboard session", async () => {
+    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const regenerate = vi.fn().mockResolvedValue("replacement");
+    running = await createSubscriptionAuthDashboardServer({
+      auth,
+      apiKey: "original",
+      regenerateApiKey: regenerate,
+    });
+    const dashboard = await fetch(running.url);
+    const cookie = dashboard.headers.get("set-cookie")?.split(";", 1)[0];
+    const headers = { cookie: cookie!, origin: running.url };
+
+    await expect(
+      fetch(`${running.url}/v1/api-key`, { headers }).then((response) => response.json()),
+    ).resolves.toEqual({ apiKey: "original" });
+    await expect(
+      fetch(`${running.url}/v1/api-key/regenerate`, { method: "POST", headers }).then((response) =>
+        response.json(),
+      ),
+    ).resolves.toEqual({ apiKey: "replacement" });
+    expect(regenerate).toHaveBeenCalledOnce();
+    expect(running.apiKey).toBe("replacement");
+    expect(
+      (
+        await fetch(`${running.url}/v1/providers`, {
+          headers: { authorization: "Bearer original" },
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(`${running.url}/v1/providers`, {
+          headers: { authorization: "Bearer replacement" },
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  test("coalesces simultaneous API key regeneration", async () => {
+    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    let finish!: (value: string) => void;
+    const regenerate = vi.fn(() => new Promise<string>((resolve) => (finish = resolve)));
+    running = await createSubscriptionAuthDashboardServer({
+      auth,
+      apiKey: "original",
+      regenerateApiKey: regenerate,
+    });
+    const dashboard = await fetch(running.url);
+    const cookie = dashboard.headers.get("set-cookie")?.split(";", 1)[0];
+    const options = { method: "POST", headers: { cookie: cookie!, origin: running.url } };
+
+    const requests = [
+      fetch(`${running.url}/v1/api-key/regenerate`, options),
+      fetch(`${running.url}/v1/api-key/regenerate`, options),
+    ];
+    await vi.waitFor(() => expect(regenerate).toHaveBeenCalledOnce());
+    finish("replacement");
+
+    const results = await Promise.all(requests);
+    await expect(Promise.all(results.map((response) => response.json()))).resolves.toEqual([
+      { apiKey: "replacement" },
+      { apiKey: "replacement" },
+    ]);
+  });
+
+  test("streams redacted request logs to the dashboard session", async () => {
+    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    vi.spyOn(auth, "proxy").mockResolvedValue(new Response(null, { status: 204 }));
+    running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "secret" });
+    const dashboard = await fetch(running.url);
+    const cookie = dashboard.headers.get("set-cookie")?.split(";", 1)[0];
+    const log = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const call = request(
+        `${running!.url}/v1/logs/stream`,
+        { headers: { cookie } },
+        (response) => {
+          expect(response.headers["content-type"]).toBe("text/event-stream");
+          response.setEncoding("utf8");
+          let buffer = "";
+          response.on("data", (chunk: string) => {
+            buffer += chunk;
+            for (let end = buffer.indexOf("\n\n"); end !== -1; end = buffer.indexOf("\n\n")) {
+              const event = buffer.slice(0, end);
+              buffer = buffer.slice(end + 2);
+              const data = event.match(/^data: (.+)$/m)?.[1];
+              if (!data) continue;
+              const entry = JSON.parse(data) as Record<string, unknown>;
+              if (entry.path === "/aisubs/test/default/v1/responses") {
+                resolve(entry);
+                response.destroy();
+              }
+            }
+          });
+          void fetch(`${running!.url}/aisubs/test/default/v1/responses`, {
+            method: "POST",
+            headers: { authorization: "Bearer secret" },
+          }).catch(reject);
+        },
+      );
+      call.on("error", reject);
+      call.end();
+    });
+
+    expect(log).toMatchObject({
+      method: "POST",
+      path: "/aisubs/test/default/v1/responses",
+      status: 204,
+    });
+    expect(log).not.toHaveProperty("headers");
+  });
+
   test("proxies authenticated account requests instead of serving the dashboard", async () => {
     directory = await mkdtemp(join(tmpdir(), "aisubs-dashboard-"));
     const store = new FileCredentialStore(join(directory, "credentials.json"));
@@ -76,7 +206,7 @@ describe("subscription auth dashboard", () => {
     vi.spyOn(auth, "proxy").mockResolvedValue(Response.json({ path: "/responses" }));
     running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "secret" });
 
-    const response = await fetch(`${running.url}/aisubs/test/default/responses`, {
+    const response = await fetch(`${running.url}/aisubs/test/default/v1/responses`, {
       method: "POST",
       headers: { authorization: "Bearer secret", "content-type": "application/json" },
       body: JSON.stringify({

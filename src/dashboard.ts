@@ -44,9 +44,19 @@ function secure(response: ServerResponse): void {
   response.setHeader("x-frame-options", "DENY");
 }
 
+function hostname(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(`http://${value}`).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return undefined;
+  }
+}
+
 export interface SubscriptionAuthDashboardOptions {
   auth: SubscriptionAuth;
   apiKey?: string;
+  regenerateApiKey?: () => Promise<string>;
   host?: string;
   port?: number;
   /** Maximum buffered proxy request body. Defaults to 10 MiB. */
@@ -69,33 +79,61 @@ export async function createSubscriptionAuthDashboardServer(
     throw new Error("The AI Subs dashboard may only bind to localhost");
   }
   const origin = `http://${urlHost(host)}`;
-  const apiKey = options.apiKey ?? randomBytes(32).toString("base64url");
-  const bootstrapToken = randomBytes(32).toString("base64url");
+  let apiKey = options.apiKey ?? `aisubs_${randomBytes(32).toString("base64url")}`;
+  let regeneratingApiKey: Promise<string> | undefined;
   const sessionToken = randomBytes(32).toString("base64url");
-  let bootstrapAvailable = true;
+  const requestLogs: Array<{
+    id: number;
+    timestamp: number;
+    method: string;
+    path: string;
+    status: number;
+    durationMs: number;
+  }> = [];
+  const logStreams = new Set<ServerResponse>();
+  let requestId = 0;
 
   const server = createServer(async (request, response) => {
     secure(response);
     try {
-      const url = new URL(request.url ?? "/", origin);
-      if (url.pathname === "/health") return sendJson(response, 200, { ok: true });
-      if (request.method === "GET" && url.pathname === "/bootstrap") {
-        if (
-          !bootstrapAvailable ||
-          !sameSecret(url.searchParams.get("token") ?? undefined, bootstrapToken)
-        ) {
-          return sendJson(response, 401, { error: "Bootstrap link is invalid or has expired" });
-        }
-        bootstrapAvailable = false;
-        response.writeHead(302, {
-          location: "/",
-          "cache-control": "no-store",
-          "set-cookie": `aisubs_session=${encodeURIComponent(sessionToken)}; HttpOnly; SameSite=Strict; Path=/`,
-        });
-        response.end();
-        return;
+      if (hostname(request.headers.host) !== host) {
+        return sendJson(response, 421, { error: "Invalid local host" });
       }
-
+      const url = new URL(request.url ?? "/", origin);
+      if (url.pathname.startsWith("/aisubs/")) {
+        const startedAt = performance.now();
+        response.once("finish", () => {
+          const entry = {
+            id: ++requestId,
+            timestamp: Date.now(),
+            method: request.method ?? "GET",
+            path: url.pathname,
+            status: response.statusCode,
+            durationMs: Math.round(performance.now() - startedAt),
+          };
+          requestLogs.push(entry);
+          if (requestLogs.length > 200) requestLogs.shift();
+          const event = `data: ${JSON.stringify(entry)}\n\n`;
+          for (const stream of logStreams) stream.write(event);
+        });
+      }
+      if (url.pathname === "/health") {
+        return sendJson(
+          response,
+          200,
+          { ok: true },
+          {
+            "x-aisubs-service": "aisubs",
+            "x-aisubs-pid": String(process.pid),
+          },
+        );
+      }
+      if (request.method === "GET" && url.pathname === "/") {
+        response.setHeader(
+          "set-cookie",
+          `aisubs_session=${encodeURIComponent(sessionToken)}; HttpOnly; SameSite=Strict; Path=/`,
+        );
+      }
       const bearer = request.headers.authorization?.startsWith("Bearer ")
         ? request.headers.authorization.slice(7)
         : undefined;
@@ -104,19 +142,46 @@ export async function createSubscriptionAuthDashboardServer(
         : request.headers["x-api-key"];
       const bearerAuthenticated = sameSecret(bearer, apiKey) || sameSecret(headerKey, apiKey);
       const cookieAuthenticated = sameSecret(cookie(request, "aisubs_session"), sessionToken);
-      if (!bearerAuthenticated && !cookieAuthenticated) {
+      const apiRoute = ["v1", "aisubs"].includes(routeSegments(url.pathname)[0] ?? "");
+      if (apiRoute && !bearerAuthenticated && !cookieAuthenticated) {
         return sendJson(response, 401, { error: "Unauthorized" });
       }
-      if (
-        cookieAuthenticated &&
-        !bearerAuthenticated &&
-        !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET") &&
-        request.headers.origin !== `http://${request.headers.host}`
-      ) {
-        return sendJson(response, 403, { error: "Cross-origin mutation blocked" });
+      if (request.method === "GET" && url.pathname === "/v1/logs/stream") {
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-store",
+          connection: "keep-alive",
+        });
+        response.flushHeaders();
+        for (const entry of requestLogs) response.write(`data: ${JSON.stringify(entry)}\n\n`);
+        logStreams.add(response);
+        request.once("close", () => logStreams.delete(response));
+        return;
+      }
+      if (apiRoute && cookieAuthenticated && !bearerAuthenticated) {
+        if (
+          !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET") &&
+          request.headers.origin !== `http://${request.headers.host}`
+        ) {
+          return sendJson(response, 403, { error: "Cross-origin mutation blocked" });
+        }
+        if (request.method === "GET" && url.pathname === "/v1/api-key") {
+          return sendJson(response, 200, { apiKey });
+        }
+        if (request.method === "POST" && url.pathname === "/v1/api-key/regenerate") {
+          regeneratingApiKey ??= (
+            options.regenerateApiKey
+              ? options.regenerateApiKey()
+              : Promise.resolve(`aisubs_${randomBytes(32).toString("base64url")}`)
+          ).finally(() => {
+            regeneratingApiKey = undefined;
+          });
+          apiKey = await regeneratingApiKey;
+          return sendJson(response, 200, { apiKey });
+        }
       }
 
-      if (["v1", "aisubs"].includes(routeSegments(url.pathname)[0] ?? "")) {
+      if (apiRoute) {
         if (
           !(await handleSubscriptionAuthApi(
             options.auth,
@@ -170,12 +235,16 @@ export async function createSubscriptionAuthDashboardServer(
   const url = `${origin}:${address.port}`;
   return {
     server,
-    apiKey,
+    get apiKey() {
+      return apiKey;
+    },
     url,
-    bootstrapUrl: `${url}/bootstrap?token=${encodeURIComponent(bootstrapToken)}`,
-    close: () =>
-      new Promise<void>((resolve, reject) =>
+    bootstrapUrl: url,
+    close: () => {
+      for (const stream of logStreams) stream.end();
+      return new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      );
+    },
   };
 }
