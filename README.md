@@ -13,6 +13,18 @@ TanStack AI, Python, cURL, or an app that accepts a custom API base URL.
   <img src="./public/aisubs-dashboard.png" alt="AI Subs dashboard with provider connections and local API access" width="100%" />
 </p>
 
+<p align="center">
+  <img src="./public/aisubs-chatgpt-account.png" alt="AISubs ChatGPT demo account details" width="100%" />
+</p>
+
+<p align="center">
+  <img src="./public/aisubs-copilot-account.png" alt="AISubs GitHub Copilot demo account details" width="100%" />
+</p>
+
+<p align="center">
+  <img src="./public/aisubs-grok-account.png" alt="AISubs Grok demo account details" width="100%" />
+</p>
+
 > Credentials, API keys, and requests remain on your computer. AISubs collects no
 > telemetry or analytics. The dashboard keeps up to 200 redacted account request logs in memory for debugging.
 
