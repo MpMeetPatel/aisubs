@@ -65,7 +65,7 @@ selected account's provider credential.
 
 AISubs preserves the provider's native request and response protocol. It also
 provides a focused, non-streaming text Chat Completions adapter for ChatGPT
-accounts so apps such as [Handy](https://github.com/cjpais/Handy) can use them.
+accounts.
 
 | Provider/model protocol            | Base URL                    | Supported request path                  |
 | ---------------------------------- | --------------------------- | --------------------------------------- |
@@ -79,20 +79,6 @@ Embeddings are intentionally not exposed. The ChatGPT compatibility adapter
 supports text messages and JSON-schema response formats; tools, images, audio,
 and streaming Chat Completions remain native-Responses-only features.
 
-### Handy
-
-Choose **Custom** in Handy and copy these values from the ChatGPT account page:
-
-```text
-Base URL: http://127.0.0.1:4319/aisubs/chatgpt/ACCOUNT/v1
-API key:  the persistent key shown on the AISubs dashboard
-Model:    an exact model ID shown for the account
-```
-
-Handy sends `POST /chat/completions` with streaming disabled. AISubs translates
-that request to ChatGPT Responses and returns the `choices[0].message.content`
-shape Handy reads.
-
 ## SDK examples
 
 Set the key once for the shell running your client:
@@ -102,7 +88,7 @@ export AISUBS_API_KEY="aisubs_..."
 ```
 
 <details>
-<summary><strong>Official OpenAI JavaScript SDK — Responses and Chat Completions</strong></summary>
+<summary><strong>Official OpenAI JavaScript SDK: Responses and Chat Completions</strong></summary>
 
 Install:
 
@@ -212,7 +198,7 @@ with the same account base URL, and select the model with `provider("MODEL_ID")`
 </details>
 
 <details>
-<summary><strong>TanStack AI — Chat Completions</strong></summary>
+<summary><strong>TanStack AI: Chat Completions</strong></summary>
 
 TanStack's generic compatibility adapter targets Chat Completions. Use it only
 for a model that lists `chat/completions`.
@@ -271,7 +257,7 @@ print(response.choices[0].message.content)
 </details>
 
 <details>
-<summary><strong>cURL — Responses, Chat Completions, Anthropic, and Google</strong></summary>
+<summary><strong>cURL: Responses, Chat Completions, Anthropic, and Google</strong></summary>
 
 ```bash
 curl "http://127.0.0.1:4319/aisubs/chatgpt/personal/v1/responses" \
