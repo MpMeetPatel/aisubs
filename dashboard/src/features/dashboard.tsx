@@ -167,8 +167,10 @@ function UseGuide({
               <div className="grid gap-1 px-4 py-3 sm:grid-cols-[130px_1fr]">
                 <dt className="font-bold">Model and API</dt>
                 <dd className="m-0 text-[11px] text-zinc-600 dark:text-zinc-300">
-                  Use the exact model ID and its reported Responses, Chat Completions, Anthropic, or
-                  Google endpoint. AISubs does not expose embeddings.
+                  Use the exact model ID. OpenAI-compatible apps can use Chat Completions; native
+                  Responses, Anthropic, Google-protocol, Realtime, and provider feature routes
+                  remain available when the account supports them. Google protocol support does not
+                  add a Google subscription provider.
                 </dd>
               </div>
             </dl>
@@ -229,6 +231,7 @@ interface RequestLog {
   path: string;
   status: number;
   durationMs: number;
+  error?: string;
 }
 
 function LogsDialog({ onClose }: { onClose(): void }) {
@@ -321,7 +324,14 @@ function LogsDialog({ onClose }: { onClose(): void }) {
                     >
                       {log.status}
                     </td>
-                    <td className="max-w-[520px] truncate px-4 py-2">{log.path}</td>
+                    <td className="max-w-[520px] px-4 py-2">
+                      <div className="truncate">{log.path}</div>
+                      {log.error ? (
+                        <div className="mt-1 line-clamp-2 break-all text-red-300" title={log.error}>
+                          {log.error}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="whitespace-nowrap px-4 py-2 text-right text-zinc-400">
                       {log.durationMs} ms
                     </td>

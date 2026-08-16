@@ -6,8 +6,10 @@
 </table>
 
 AISubs connects provider accounts once and exposes each account through a local,
-account-scoped API. Use it from the official OpenAI or Anthropic SDK, Vercel AI SDK,
-TanStack AI, Python, cURL, or an app that accepts a custom API base URL.
+account-scoped API. Every generative account has an OpenAI-compatible surface,
+while native Responses, Anthropic Messages, Google `generateContent`, Realtime,
+and provider-specific endpoints remain available. Use it from an SDK, cURL, or
+an app that accepts a custom API base URL.
 
 <p align="center">
   <img src="./public/aisubs-dashboard.png" alt="AI Subs dashboard with provider connections and local API access" width="100%" />
@@ -47,6 +49,11 @@ key: reveal it, copy it, or deliberately regenerate it there.
 The default URL is `http://127.0.0.1:4319`. Credentials and the API key are stored
 under `~/.aisubs` and reused on later starts.
 
+Supported subscription/account providers are ChatGPT, Claude, GitHub Copilot,
+Grok, OpenCode Go, and OpenCode Zen. Google `generateContent` is a supported
+wire protocol only for Google models surfaced by one of those connected
+providers; AISubs does not connect or claim a Google subscription account.
+
 ## Use an account from any compatible app
 
 Open an account in the dashboard and copy its base URL:
@@ -73,23 +80,98 @@ export OPENAI_API_KEY="aisubs_..."
 AISubs removes its local key before forwarding a request and adds only the
 selected account's provider credential.
 
+## Desktop app examples
+
+Keep AISubs running, then give the app the three values from the connected
+account: its base URL, the AISubs API key, and an exact model ID.
+
+### [Handy](https://handy.computer/download) (macOS)
+
+Open **Post Process** and set:
+
+| Handy field | Value                                                    |
+| ----------- | -------------------------------------------------------- |
+| Provider    | `Custom`                                                 |
+| Base URL    | `http://127.0.0.1:4319/aisubs/chatgpt/default/v1`        |
+| API Key     | Your `aisubs_...` key from the AISubs dashboard          |
+| Model       | An exact Dashboard model ID, for example `gpt-5.6-terra` |
+
+Click Handy’s refresh button beside **Model**, select the model, then choose a
+prompt and test it. Replace `chatgpt/default` with the provider and account
+segment copied from your AISubs dashboard when using a different account.
+
+### [Raycast](https://www.raycast.com/download) AI custom provider
+
+Create or edit `~/.config/raycast/ai/providers.yaml` and add a provider like
+this. Keep the API key private—use the value from your AISubs dashboard, never
+one copied from an example or screenshot.
+
+```yaml
+providers:
+  - id: ai-subs
+    name: AI Subs
+    base_url: http://127.0.0.1:4319/aisubs/chatgpt/default/v1
+    api_keys:
+      default: aisubs_REPLACE_WITH_YOUR_DASHBOARD_KEY
+    models:
+      - id: gpt-5.6-terra
+        name: AISubs GPT-5.6 Terra
+        context: 272000
+        description: ChatGPT subscription via AISubs
+        abilities:
+          vision:
+            supported: true
+          system_message:
+            supported: true
+          tools:
+            supported: true
+          reasoning_effort:
+            supported: true
+```
+
+Restart Raycast after saving. Replace the base URL, model ID, context, and
+abilities with the values shown for your connected account. Do not enable an
+ability that the selected model does not report.
+
+[Cline](https://cline.bot/) also accepts a custom OpenAI-compatible endpoint;
+use the same base URL, local AISubs key, and model ID. Exact settings labels can
+change between client releases, so the account dashboard remains the source of
+truth for the three values.
+
 ### Compatibility contract
 
-AISubs preserves the provider's native request and response protocol. It also
-provides a focused, non-streaming text Chat Completions adapter for ChatGPT
-accounts.
+Use Chat Completions when an app offers only an “OpenAI-compatible” provider.
+AISubs discovers the selected model's native protocol and translates the
+request and response when necessary. Calling a model's native protocol remains
+a pass-through, which preserves provider-specific fields and streaming events.
 
-| Provider/model protocol            | Base URL                    | Supported request path                  |
-| ---------------------------------- | --------------------------- | --------------------------------------- |
-| OpenAI Responses                   | Account URL ending in `/v1` | `POST /responses`                       |
-| OpenAI-compatible Chat Completions | Account URL ending in `/v1` | `POST /chat/completions`                |
-| Anthropic Messages                 | Account URL ending in `/v1` | `POST /messages`                        |
-| Google generateContent             | Account URL ending in `/v1` | `POST /models/MODEL_ID:generateContent` |
-| Model discovery                    | Account URL ending in `/v1` | `GET /models`                           |
+| Integration path                   | Example full URL                                                                       | Request example                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------- |
+| OpenAI Responses                   | `http://127.0.0.1:4319/aisubs/chatgpt/default/v1/responses`                            | `POST /responses`                       |
+| OpenAI-compatible Chat Completions | `http://127.0.0.1:4319/aisubs/chatgpt/default/v1/chat/completions`                     | `POST /chat/completions`                |
+| Anthropic Messages                 | `http://127.0.0.1:4319/aisubs/claude/default/v1/messages`                              | `POST /messages`                        |
+| Google generateContent             | `http://127.0.0.1:4319/aisubs/opencode-zen/default/v1/models/MODEL_ID:generateContent` | `POST /models/MODEL_ID:generateContent` |
+| Model discovery                    | `http://127.0.0.1:4319/aisubs/chatgpt/default/v1/models`                               | `GET /models`                           |
+| Model details                      | `http://127.0.0.1:4319/aisubs/chatgpt/default/v1/models/MODEL_ID`                      | `GET /models/MODEL_ID`                  |
+| OpenAI Realtime                    | `ws://127.0.0.1:4319/aisubs/PROVIDER/ACCOUNT/v1/realtime?model=MODEL_ID`               | WebSocket                               |
 
-Embeddings are intentionally not exposed. The ChatGPT compatibility adapter
-supports text messages and JSON-schema response formats; tools, images, audio,
-and streaming Chat Completions remain native-Responses-only features.
+Replace the provider, account (`default`), and model ID with the values shown
+for your connected account in the AISubs dashboard.
+
+Cross-protocol translation covers text and system messages, streaming, function
+tools and tool results, image/file/audio input where both protocols support it,
+JSON-schema output, reasoning effort, stop conditions, and usage including
+cached and reasoning tokens. If a feature has no safe equivalent, AISubs returns
+an explicit `unsupported_feature` error instead of silently dropping it.
+
+Provider-native routes—including embeddings, image/audio generation, batches,
+files, and Realtime—are forwarded when that connected provider exposes them.
+AISubs cannot add a capability that the provider, subscription, or selected
+model does not have. Native requests preserve provider-specific cache controls;
+translated requests preserve shared fields and cache-usage counters. Other than
+Responses-to-Chat streaming, cross-protocol streams may be emitted after the
+native response completes; use the native endpoint when event-level streaming
+or provider-specific fields matter.
 
 ## SDK examples
 
@@ -129,8 +211,8 @@ const stream = await client.responses.create({
 for await (const event of stream) console.log(event);
 ```
 
-Chat Completions uses the same client with an account/model that reports that
-endpoint:
+Chat Completions uses the same client with any generative model. AISubs
+translates to the selected model's native protocol when needed:
 
 ```js
 const response = await client.chat.completions.create({
@@ -204,16 +286,17 @@ const result = streamText({
 for await (const text of result.textStream) process.stdout.write(text);
 ```
 
-For Chat Completions, install `@ai-sdk/openai-compatible`, create the provider
-with the same account base URL, and select the model with `provider("MODEL_ID")`.
+For the universal Chat Completions surface, install
+`@ai-sdk/openai-compatible`, create the provider with the same account base URL,
+and select the model with `provider("MODEL_ID")`.
 
 </details>
 
 <details>
 <summary><strong>TanStack AI: Chat Completions</strong></summary>
 
-TanStack's generic compatibility adapter targets Chat Completions. Use it only
-for a model that lists `chat/completions`.
+TanStack's generic compatibility adapter targets Chat Completions. AISubs
+translates it to the selected model's native protocol.
 
 ```bash
 nub install @tanstack/ai @tanstack/ai-openai
@@ -311,7 +394,9 @@ curl "http://127.0.0.1:4319/aisubs/opencode-zen/lab/v1/models/MODEL_ID_FROM_DASH
 ## Direct AISubs SDK
 
 Use the in-process SDK when AISubs is part of your trusted Node.js backend. It
-needs no local server or AISubs API key.
+needs no local server, AISubs API key, or app-specific integration. Direct SDK
+requests use the provider-native endpoint; the local server is the surface that
+adds cross-protocol compatibility for third-party clients.
 
 Install the package in a project:
 
@@ -335,8 +420,12 @@ if (!(await account.status()).authenticated) {
 }
 
 const catalog = await account.getModels();
-const model = catalog?.models.find((item) => item.selectable !== false)?.id;
-if (!model) throw new Error("No selectable model is available");
+const selected = catalog?.models.find((item) => item.selectable !== false);
+if (!selected) throw new Error("No selectable model is available");
+
+// ChatGPT models are native Responses models. Other providers report their
+// native endpoint in selected.endpoints; use the matching native SDK adapter.
+const model = selected.id;
 
 const response = await account.proxy("responses", {
   method: "POST",
@@ -351,6 +440,11 @@ for await (const chunk of response.body ?? []) process.stdout.write(Buffer.from(
 Available provider factories are `chatGptProvider()`, `claudeProvider()`,
 `copilotProvider()`, `grokProvider()`, `openCodeGoProvider()`, and
 `openCodeZenProvider()`.
+
+`getModels()` is cached for five minutes and `getUsage()` for 15 seconds by
+default, with concurrent calls deduplicated. Account changes invalidate both.
+Pass `modelsCacheTtlMs` or `usageCacheTtlMs` to `createSubscriptionAuth()` when
+an in-process application needs different metadata freshness.
 
 Useful account methods:
 
@@ -537,9 +631,12 @@ POST   /v1/api-key/regenerate      # dashboard session only
 *      /aisubs/:provider/:account/v1/*
 ```
 
-The provider and account routes require `Authorization: Bearer AISUBS_API_KEY`
-or `x-api-key: AISUBS_API_KEY`. Regenerating the key immediately invalidates the
-old key.
+The provider and account routes accept `Authorization: Bearer AISUBS_API_KEY`
+or `x-api-key: AISUBS_API_KEY`. A Google-protocol client can instead put that
+same local AISubs key in `x-goog-api-key` or `?key=`; this does not represent a
+Google credential or subscription. Local credentials are removed from headers
+and query strings before proxying. Regenerating the key immediately invalidates
+the old key.
 
 ## Storage and security
 

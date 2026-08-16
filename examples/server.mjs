@@ -4,9 +4,12 @@ import {
   FileCredentialStore,
   FileApiKeyStore,
   chatGptProvider,
+  claudeProvider,
   copilotProvider,
   createSubscriptionAuth,
   grokProvider,
+  openCodeGoProvider,
+  openCodeZenProvider,
 } from "aisubs";
 import { createSubscriptionAuthServer } from "aisubs/http";
 
@@ -16,7 +19,14 @@ const apiKey =
   (await new FileApiKeyStore(join(directory, "api-key")).readOrCreate());
 const auth = createSubscriptionAuth({
   store: new FileCredentialStore(join(directory, "credentials.json")),
-  providers: [chatGptProvider(), copilotProvider(), grokProvider()],
+  providers: [
+    chatGptProvider(),
+    claudeProvider(),
+    copilotProvider(),
+    grokProvider(),
+    openCodeGoProvider(),
+    openCodeZenProvider(),
+  ],
 });
 const server = await createSubscriptionAuthServer({ auth, apiKey, port: 4319 });
 console.log(`AI Subs API: ${server.url}`);

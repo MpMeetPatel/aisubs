@@ -202,6 +202,8 @@ describe("built-in subscription providers", () => {
         maxOutputTokens: undefined,
         reasoningEfforts: ["low", "high"],
         inputModalities: ["text", "image"],
+        endpoints: ["responses"],
+        supportsToolCall: true,
         available: true,
       },
     ]);
@@ -626,7 +628,12 @@ describe("built-in subscription providers", () => {
       {
         id: "returned-by-anthropic",
         name: "From API",
+        description: undefined,
+        contextWindow: undefined,
+        maxOutputTokens: undefined,
+        inputModalities: ["text", "image", "document"],
         endpoints: ["messages"],
+        supportsToolCall: true,
         available: true,
         selectable: true,
       },

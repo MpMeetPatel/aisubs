@@ -551,6 +551,28 @@ export class SubscriptionAuth {
     return this.fetch(provider, new URL(path, base), init, accountKey);
   }
 
+  /** Build an authorized direct-provider request for transports such as WebSocket. */
+  async authorizeProxyRequest(
+    provider: ProviderId,
+    account: string,
+    path: string,
+    init?: RequestInit,
+  ): Promise<Request> {
+    const adapter = this.adapter(provider);
+    const accountKey = normalizeAccountKey(account);
+    if (adapter.proxy) {
+      throw new Error(`${provider} does not expose a direct transport endpoint`);
+    }
+    const credential = await this.credential(provider, accountKey);
+    const baseUrl =
+      typeof adapter.proxyBaseUrl === "function"
+        ? adapter.proxyBaseUrl(credential)
+        : adapter.proxyBaseUrl;
+    if (!baseUrl) throw new Error(`${provider} does not expose a direct API endpoint`);
+    const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+    return adapter.authorize(createRequest(new URL(path, base), init), credential);
+  }
+
   async getUsage(
     provider: ProviderId,
     account = DEFAULT_ACCOUNT,

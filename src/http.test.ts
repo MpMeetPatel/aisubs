@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { SubscriptionAuth } from "./auth.js";
 import { createSubscriptionAuthServer, type SubscriptionAuthServer } from "./http.js";
 import { MemoryCredentialStore } from "./store.js";
@@ -68,6 +69,74 @@ describe("subscription auth HTTP server", () => {
         })
       ).status,
     ).toBe(200);
+    expect(
+      (
+        await fetch(`${running.url}/v1/providers`, {
+          headers: { "x-goog-api-key": "secret" },
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  test("allows authenticated browser clients through CORS preflight", async () => {
+    running = await createSubscriptionAuthServer({
+      auth: new SubscriptionAuth(new MemoryCredentialStore(), [provider]),
+      apiKey: "secret",
+    });
+    const response = await fetch(`${running.url}/aisubs/test/default/v1/chat/completions`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://client.example",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type",
+      },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://client.example");
+    expect(response.headers.get("access-control-allow-methods")).toContain("POST");
+  });
+
+  test("tunnels authenticated Realtime WebSocket traffic to a native provider", async () => {
+    const upstream = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => upstream.once("listening", resolve));
+    const address = upstream.address();
+    if (typeof address === "string") throw new Error("Expected a TCP WebSocket address");
+    upstream.on("connection", (socket, request) => {
+      expect(request.headers.authorization).toBe("Bearer provider-secret");
+      socket.on("message", (data, binary) => socket.send(data, { binary }));
+    });
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
+    vi.spyOn(auth, "authorizeProxyRequest").mockResolvedValue(
+      new Request(`http://127.0.0.1:${address.port}/realtime`, {
+        headers: { authorization: "Bearer provider-secret" },
+      }),
+    );
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+    try {
+      const socket = await running.app.injectWS(
+        "/aisubs/test/default/v1/realtime?model=test-model",
+        { headers: { authorization: "Bearer secret" } },
+      );
+      const echoed = new Promise<string>((resolve) =>
+        socket.once("message", (data) => resolve(data.toString())),
+      );
+      socket.send("hello");
+      await expect(echoed).resolves.toBe("hello");
+      socket.terminate();
+      expect(auth.authorizeProxyRequest).toHaveBeenCalledWith(
+        "test",
+        "default",
+        "realtime?model=test-model",
+        expect.any(Object),
+      );
+      const forwarded = new Headers(
+        vi.mocked(auth.authorizeProxyRequest).mock.calls[0]?.[3]?.headers,
+      );
+      expect(forwarded.get("authorization")).toBeNull();
+      expect(forwarded.get("x-api-key")).toBeNull();
+    } finally {
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
   });
 
   test("exposes account-scoped sessions and usage", async () => {
@@ -150,9 +219,15 @@ describe("subscription auth HTTP server", () => {
     expect(headers.get("proxy-authorization")).toBeNull();
     expect(headers.get("x-api-key")).toBeNull();
     expect(headers.get("x-client-feature")).toBe("kept");
+
+    const google = await fetch(`${running.url}/aisubs/test/default/native?key=secret&alt=sse`, {
+      headers: { "x-client-feature": "kept" },
+    });
+    expect(google.status).toBe(204);
+    expect(proxy).toHaveBeenLastCalledWith("test", "default", "native?alt=sse", expect.any(Object));
   });
 
-  test("provides an account-scoped OpenAI-compatible v1 surface without embeddings", async () => {
+  test("provides account-scoped models and passes feature endpoints through", async () => {
     const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     await (await auth.account("test", "work").signIn()).wait();
     const proxy = vi.spyOn(auth, "proxy").mockResolvedValue(new Response(null, { status: 204 }));
@@ -162,7 +237,27 @@ describe("subscription auth HTTP server", () => {
     const models = await fetch(`${running.url}/aisubs/test/work/v1/models`, { headers });
     await expect(models.json()).resolves.toEqual({
       object: "list",
-      data: [{ id: "test-model", object: "model", owned_by: "test" }],
+      data: [
+        {
+          id: "test-model",
+          object: "model",
+          owned_by: "test",
+          capabilities: {
+            endpoints: [],
+            input_modalities: ["text"],
+            reasoning_efforts: [],
+            tools: false,
+          },
+        },
+      ],
+    });
+    const model = await fetch(`${running.url}/aisubs/test/work/v1/models/test-model`, {
+      headers,
+    });
+    await expect(model.json()).resolves.toMatchObject({
+      id: "test-model",
+      object: "model",
+      owned_by: "test",
     });
     const response = await fetch(`${running.url}/aisubs/test/work/v1/chat/completions`, {
       method: "POST",
@@ -174,7 +269,54 @@ describe("subscription auth HTTP server", () => {
       method: "POST",
       headers,
     });
-    expect(embeddings.status).toBe(404);
+    expect(embeddings.status).toBe(204);
+    expect(proxy).toHaveBeenCalledWith("test", "work", "embeddings", expect.any(Object));
+  });
+
+  test("shares the account model cache across discovery and compatible requests", async () => {
+    const getModels = vi.fn(async () => [
+      { id: "claude-test", endpoints: ["messages"], supportsToolCall: true },
+    ]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [{ ...provider, getModels }]);
+    await (await auth.account("test", "work").signIn()).wait();
+    vi.spyOn(auth, "proxy").mockImplementation(async () =>
+      Response.json({
+        id: "msg_cache",
+        type: "message",
+        role: "assistant",
+        model: "claude-test",
+        content: [{ type: "text", text: "cached catalog" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 2, output_tokens: 2 },
+      }),
+    );
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+    const headers = {
+      authorization: "Bearer secret",
+      "content-type": "application/json",
+    };
+
+    expect(
+      (
+        await fetch(`${running.url}/aisubs/test/work/v1/models`, {
+          headers,
+        })
+      ).status,
+    ).toBe(200);
+    for (let index = 0; index < 2; index += 1) {
+      const response = await fetch(`${running.url}/aisubs/test/work/v1/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "claude-test",
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      });
+      await expect(response.json()).resolves.toMatchObject({
+        choices: [{ message: { content: "cached catalog" } }],
+      });
+    }
+    expect(getModels).toHaveBeenCalledTimes(1);
   });
 
   test("adapts Handy-style Chat Completions to ChatGPT Responses", async () => {
@@ -200,6 +342,8 @@ describe("subscription auth HTTP server", () => {
       body: JSON.stringify({
         model: "gpt-test",
         stream: false,
+        temperature: 0.7,
+        top_p: 0.9,
         reasoning_effort: "none",
         messages: [
           { role: "system", content: "Improve the transcription." },
@@ -213,8 +357,9 @@ describe("subscription auth HTTP server", () => {
     });
 
     expect(response.status).toBe(200);
+    expect(proxy.mock.calls[0]?.[3]?.signal?.aborted).toBe(false);
     await expect(response.json()).resolves.toMatchObject({
-      id: "resp_1",
+      id: "chatcmpl_resp_1",
       model: "gpt-test",
       choices: [{ message: { role: "assistant", content: "Polished transcript" } }],
       usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
@@ -226,7 +371,14 @@ describe("subscription auth HTTP server", () => {
       store: false,
       stream: true,
       instructions: "Improve the transcription.",
-      input: [{ role: "user", content: [{ type: "input_text", text: "raw transcript" }] }],
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "raw transcript" }],
+        },
+      ],
+      reasoning: { effort: "none" },
       text: {
         format: {
           type: "json_schema",
@@ -236,6 +388,84 @@ describe("subscription auth HTTP server", () => {
         },
       },
     });
+    expect(upstream).not.toHaveProperty("temperature");
+    expect(upstream).not.toHaveProperty("top_p");
+  });
+
+  test("accepts text content parts from OpenAI-compatible clients", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
+    const proxy = vi
+      .spyOn(auth, "proxy")
+      .mockResolvedValue(
+        new Response(
+          [
+            'data: {"type":"response.output_text.delta","delta":"Hello"}',
+            'data: {"type":"response.completed","response":{"id":"resp_1"}}',
+            "",
+          ].join("\n\n"),
+        ),
+      );
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+
+    const response = await fetch(`${running.url}/aisubs/chatgpt/work/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(proxy.mock.calls[0]?.[3]?.body))).toMatchObject({
+      input: [{ role: "user", content: [{ type: "input_text", text: "Hello" }] }],
+    });
+  });
+
+  test("streams Chat Completions chunks for streaming clients", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
+    vi.spyOn(auth, "proxy").mockResolvedValue(
+      new Response(
+        [
+          'data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test","created_at":123}}',
+          'data: {"type":"response.output_text.delta","delta":"Hello"}',
+          'data: {"type":"response.output_text.delta","delta":" world"}',
+          'data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","created_at":123,"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+      ),
+    );
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+
+    const response = await fetch(`${running.url}/aisubs/chatgpt/work/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: true,
+        messages: [{ role: "user", content: "Hello" }],
+      }),
+    });
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const chunks = (await response.text()).split("\n\n").flatMap((event) => {
+      const data = event.match(/^data: (.+)$/m)?.[1];
+      return data && data !== "[DONE]" ? [JSON.parse(data) as Record<string, unknown>] : [];
+    });
+    expect(chunks).toMatchObject([
+      {
+        id: "chatcmpl_resp_1",
+        object: "chat.completion.chunk",
+        choices: [{ delta: { role: "assistant" } }],
+      },
+      { choices: [{ delta: { content: "Hello" } }] },
+      { choices: [{ delta: { content: " world" } }] },
+      {
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+      },
+    ]);
   });
 
   test("passes native ChatGPT Responses through unchanged", async () => {
@@ -274,7 +504,9 @@ describe("subscription auth HTTP server", () => {
       body: "four",
     });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Request body is too large" });
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { message: expect.stringMatching(/too large/i) },
+    });
   });
 });

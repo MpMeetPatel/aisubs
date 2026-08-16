@@ -141,7 +141,6 @@ function normalizeModel(value: unknown): ProviderModel | null {
   const capabilities = isRecord(value.capabilities) ? value.capabilities : {};
   const limits = isRecord(capabilities.limits) ? capabilities.limits : {};
   const supports = isRecord(capabilities.supports) ? capabilities.supports : {};
-  if (supports.tool_calls === false) return null;
   const modalities = ["text"];
   if (supports.vision === true || isRecord(limits.vision)) modalities.push("image");
   return {

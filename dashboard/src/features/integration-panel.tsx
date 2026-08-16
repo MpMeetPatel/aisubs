@@ -54,18 +54,85 @@ function snippets(
   const anthropicSdkBase = base.slice(0, -3);
   const env = "AISUBS_API_KEY";
   const providerFactory = providerFactoryName(provider);
-  if (provider.id === "claude") {
-    return [
-      {
-        id: "app",
-        label: "Any compatible app",
-        code: `Provider type: Anthropic compatible
+  const universal: Snippet[] = [
+    {
+      id: "app",
+      label: "Any OpenAI-compatible app",
+      code: `Provider type: OpenAI compatible
 Base URL: ${base}
 API key: <copy from the AISubs dashboard>
 Model: ${model}
-Endpoint: POST /messages`,
-        note: "Paste these values into any app that supports a custom Anthropic API base URL. The app must support the Messages API.",
-      },
+Endpoint: POST /chat/completions`,
+      note: "Use this setup even when the subscription is Claude, ChatGPT, Copilot, Grok, or OpenCode. AISubs selects and translates to the model's native protocol.",
+    },
+    {
+      id: "openai-compatible",
+      label: "OpenAI SDK · compatible",
+      install: "nub install openai",
+      code: `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${base}",
+  apiKey: process.env.${env},
+});
+
+const result = await client.chat.completions.create({
+  model: "${model}",
+  messages: [{ role: "user", content: "Hello from AISubs" }],
+  stream: true,
+});
+
+for await (const chunk of result) process.stdout.write(chunk.choices[0]?.delta.content ?? "");`,
+    },
+    {
+      id: "raycast",
+      label: "Raycast / custom provider",
+      code: `Provider: OpenAI compatible
+Base URL: ${base}
+API key: <copy from the AISubs dashboard>
+Model: ${model}
+Streaming: supported
+System messages: supported
+Tools: supported when the selected model supports them
+Vision: supported when the selected model supports it`,
+      note: "The same values work in Handy, Raycast, Cline, and other apps that accept an OpenAI-compatible base URL.",
+    },
+    {
+      id: "curl-compatible",
+      label: "OpenAI compatible · cURL",
+      code: `curl "${base}/chat/completions" \
+  -H "Authorization: Bearer \$${env}" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"${model}","messages":[{"role":"user","content":"Hello from AISubs"}],"stream":true}'`,
+    },
+    {
+      id: "aisubs",
+      label: "AISubs SDK",
+      install: "nub install aisubs",
+      code: `import {
+  createSubscriptionAuth,
+  ${providerFactory},
+} from "aisubs";
+
+const subscriptions = createSubscriptionAuth({
+  providers: [${providerFactory}()],
+});
+const account = subscriptions.account("${provider.id}", "${account}");
+
+if (!(await account.status()).authenticated) {
+  const login = await account.signIn();
+  console.log(login.prompt);
+  await login.wait();
+}
+
+const catalog = await account.getModels();
+console.log(catalog?.models);`,
+      note: "Direct, in-process SDK: use the model's reported native endpoint with account.proxy() or inject account.proxy() as an SDK fetch transport. No local HTTP server or AISubs API key is needed.",
+    },
+  ];
+  const withUniversal = (native: Snippet[]) => [...universal, ...native];
+  if (provider.id === "claude") {
+    return withUniversal([
       {
         id: "anthropic",
         label: "Anthropic SDK",
@@ -90,21 +157,11 @@ Endpoint: POST /messages`,
         code: `claude -p \\\n  --model ${model} \\\n  --output-format stream-json \\\n  --verbose \\\n  "Hello from AISubs"`,
         note: "Optional: Claude Code remains available independently of AISubs.",
       },
-    ];
+    ]);
   }
   const api = modelApi(provider, selectedModel);
   if (api === "messages") {
-    return [
-      {
-        id: "app",
-        label: "Any compatible app",
-        code: `Provider type: Anthropic compatible
-Base URL: ${base}
-API key: <copy from the AISubs dashboard>
-Model: ${model}
-Endpoint: POST /messages`,
-        note: "Paste these values into an app that supports a custom Anthropic API base URL and the Messages API.",
-      },
+    return withUniversal([
       {
         id: "anthropic",
         label: "Anthropic SDK",
@@ -116,27 +173,17 @@ Endpoint: POST /messages`,
         label: "cURL",
         code: `curl "${base}/messages" \\\n  -H "x-api-key: $${env}" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d '{"model":"${model}","max_tokens":1024,"messages":[{"role":"user","content":"Hello from AISubs"}]}'`,
       },
-    ];
+    ]);
   }
   if (api === "google") {
-    return [
-      {
-        id: "app",
-        label: "Any compatible app",
-        code: `Provider type: Google Generative Language
-Base URL: ${base}
-API key: <copy from the AISubs dashboard>
-Model: ${model}
-Endpoint: POST /models/${model}:generateContent`,
-        note: "Use these values only in an app that accepts a custom Google generateContent base URL.",
-      },
+    return withUniversal([
       {
         id: "curl",
         label: "Google generateContent · cURL",
         code: `curl "${base}/models/${model}:generateContent" \\\n  -H "Authorization: Bearer $${env}" \\\n  -H "content-type: application/json" \\\n  -d '{"contents":[{"role":"user","parts":[{"text":"Hello from AISubs"}]}]}'`,
         note: "OpenCode exposes Gemini models through the native Google generateContent endpoint.",
       },
-    ];
+    ]);
   }
   const responses = api === "responses";
   const chatGpt = provider.id === "chatgpt";
@@ -150,21 +197,7 @@ Endpoint: POST /models/${model}:generateContent`,
   const chatVercel = streaming
     ? `import { createOpenAICompatible } from "@ai-sdk/openai-compatible";\nimport { streamText } from "ai";\n\nconst account = createOpenAICompatible({\n  name: "${provider.id}",\n  baseURL: "${base}",\n  apiKey: process.env.${env},\n});\n\nconst result = streamText({\n  model: account("${model}"),\n  prompt: "Hello from AISubs",\n});\n\nfor await (const text of result.textStream) process.stdout.write(text);`
     : `import { createOpenAICompatible } from "@ai-sdk/openai-compatible";\nimport { generateText } from "ai";\n\nconst account = createOpenAICompatible({\n  name: "${provider.id}",\n  baseURL: "${base}",\n  apiKey: process.env.${env},\n});\n\nconst { text } = await generateText({\n  model: account("${model}"),\n  prompt: "Hello from AISubs",\n});\n\nconsole.log(text);`;
-  return [
-    {
-      id: "app",
-      label: "Any compatible app",
-      code: `Provider type: ${responses ? "OpenAI Responses" : "OpenAI compatible"}
-Base URL: ${base}
-API key: <copy from the AISubs dashboard>
-Model: ${model}
-Endpoint: POST /${path}`,
-      note: responses
-        ? chatGpt
-          ? "Use the Responses API natively. AISubs also adapts non-streaming, text-only Chat Completions for apps such as Handy."
-          : "Paste these values into an app that supports a custom OpenAI base URL and the Responses API. Chat-Completions-only apps cannot use a Responses-only model."
-        : "Paste these values into any app that supports a custom OpenAI-compatible base URL and Chat Completions.",
-    },
+  return withUniversal([
     ...(chatGpt
       ? [
           {
@@ -178,40 +211,6 @@ Model: ${model}`,
           },
         ]
       : []),
-    {
-      id: "aisubs",
-      label: "AISubs SDK",
-      install: "nub install aisubs",
-      code: `import {
-  createSubscriptionAuth,
-  ${providerFactory},
-} from "aisubs";
-
-// AISubs uses ~/.aisubs/credentials.json by default.
-const subscriptions = createSubscriptionAuth({
-  providers: [${providerFactory}()],
-});
-
-const account = subscriptions.account("${provider.id}", "${account}");
-
-if (!(await account.status()).authenticated) {
-  const login = await account.signIn();
-  console.log(login.prompt); // Open the URL or show the device code to the user.
-  await login.wait();
-}
-
-const details = await account.details();
-console.log({
-  account: details.session.account,
-  credential: details.credential,
-  usage: details.usage,
-  models: details.models,
-});
-
-// Later, remove this account and its locally stored credentials:
-// await account.signOut();`,
-      note: "Direct, in-process SDK: login, logout, safe account details, refreshes, host validation, and metadata caching. No local HTTP server or AISubs API key is needed.",
-    },
     {
       id: "vercel",
       label: "Vercel AI SDK",
@@ -274,16 +273,20 @@ ${streaming ? "for event in response:\n    print(event)" : "print(response.choic
       label: "cURL",
       code: `curl "${base}/${path}" \\\n  -H "Authorization: Bearer \$${env}" \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`,
     },
-  ];
+  ]);
 }
 
 function apiName(provider: Provider, model?: ProviderModel): string {
-  if (provider.id === "claude") return "Anthropic Messages API";
   const api = modelApi(provider, model);
-  if (api === "responses") return "OpenAI Responses API";
-  if (api === "messages") return "Anthropic Messages API";
-  if (api === "google") return "Google generateContent API";
-  return "OpenAI-compatible Chat Completions API";
+  const native =
+    api === "responses"
+      ? "Responses"
+      : api === "messages"
+        ? "Anthropic Messages"
+        : api === "google"
+          ? "Google generateContent"
+          : "Chat Completions";
+  return `OpenAI compatible · native ${native}`;
 }
 
 export function IntegrationPanel({

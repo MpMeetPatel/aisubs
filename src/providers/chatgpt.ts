@@ -107,6 +107,9 @@ function normalizeModel(value: unknown): (ProviderModel & { priority: number }) 
     maxOutputTokens: numberValue(value.max_output_tokens),
     reasoningEfforts: levels.length ? levels : stringArray(value.supported_reasoning_efforts),
     inputModalities: stringArray(value.input_modalities),
+    endpoints: ["responses"],
+    supportsToolCall:
+      value.supports_tool_calls === false || value.supports_tools === false ? false : true,
     available: visibility !== "hide" && value.supported_in_api !== false,
     priority: numberValue(value.priority) ?? Number.MAX_SAFE_INTEGER,
   };

@@ -155,7 +155,9 @@ describe("subscription auth dashboard", () => {
 
   test("streams redacted request logs to the dashboard session", async () => {
     const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
-    vi.spyOn(auth, "proxy").mockResolvedValue(new Response(null, { status: 204 }));
+    vi.spyOn(auth, "proxy").mockResolvedValue(
+      Response.json({ error: { message: "provider rejected request" } }, { status: 400 }),
+    );
     running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "secret" });
     const dashboard = await fetch(running.url);
     const cookie = dashboard.headers.get("set-cookie")?.split(";", 1)[0];
@@ -194,7 +196,8 @@ describe("subscription auth dashboard", () => {
     expect(log).toMatchObject({
       method: "POST",
       path: "/aisubs/test/default/v1/responses",
-      status: 204,
+      status: 400,
+      error: "provider rejected request",
     });
     expect(log).not.toHaveProperty("headers");
   });
