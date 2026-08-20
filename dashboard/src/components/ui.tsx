@@ -62,7 +62,7 @@ export function PlanBadge({ plan, className = "" }: { plan: string; className?: 
   );
 }
 
-const providerLogo = {
+const providerLogo: Record<string, readonly [string, string]> = {
   chatgpt: [
     "border-emerald-500/40 bg-emerald-500/10",
     "text-emerald-600 dark:text-emerald-300 [mask-image:url('/logos/openai.svg')]",
@@ -79,7 +79,7 @@ const providerLogo = {
     "border-zinc-400/40 bg-zinc-500/10",
     "text-zinc-800 dark:text-zinc-100 [mask-image:url('/logos/xai.svg')]",
   ],
-} as const;
+};
 
 export function ProviderMark({ provider }: { provider: Provider }) {
   if (provider.id === "opencode-go" || provider.id === "opencode-zen") {
@@ -94,7 +94,19 @@ export function ProviderMark({ provider }: { provider: Provider }) {
       </span>
     );
   }
-  const [mark, logo] = providerLogo[provider.id as keyof typeof providerLogo] ?? providerLogo.grok;
+  const style = providerLogo[provider.id];
+  if (!style) {
+    return (
+      <span
+        className="grid size-[38px] shrink-0 place-items-center rounded-[10px] border border-zinc-400/40 bg-zinc-500/10 text-sm font-black text-zinc-700 dark:text-zinc-200"
+        role="img"
+        aria-label={`${provider.name} logo`}
+      >
+        {provider.name.trim().charAt(0).toUpperCase() || "?"}
+      </span>
+    );
+  }
+  const [mark, logo] = style;
   return (
     <span
       className={`grid size-[38px] shrink-0 place-items-center rounded-[10px] border ${mark}`}
@@ -123,10 +135,12 @@ export function CopyButton({
       className={`inline-flex min-h-7 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 text-xs font-bold text-zinc-500 transition hover:border-zinc-300 hover:text-zinc-950 active:translate-y-px dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-50 ${className}`}
       type="button"
       onClick={() => {
-        void copy(value).then(() => {
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1400);
-        });
+        void copy(value)
+          .then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1400);
+          })
+          .catch(() => setCopied(false));
       }}
     >
       {copied ? <Check {...icon} /> : <Copy {...icon} />}

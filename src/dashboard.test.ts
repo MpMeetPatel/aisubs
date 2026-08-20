@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,7 @@ let running: SubscriptionAuthDashboardServer | undefined;
 afterEach(async () => {
   await running?.close().catch(() => undefined);
   if (directory) await rm(directory, { recursive: true, force: true });
+  vi.unstubAllEnvs();
   running = undefined;
   directory = undefined;
 });
@@ -124,6 +125,54 @@ describe("subscription auth dashboard", () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  test("configures and restores Codex without changing profile settings", async () => {
+    directory = await mkdtemp(join(tmpdir(), "aisubs-codex-"));
+    const config = join(directory, "config.toml");
+    const catalog = join(directory, "catalog.json");
+    await writeFile(config, '[profiles.work]\nmodel_provider = "openai"\n');
+    vi.stubEnv("CODEX_CONFIG", config);
+    vi.stubEnv("CODEX_CATALOG", catalog);
+    vi.stubEnv("AISUBS_PROVIDERS", "test");
+
+    const store = new FileCredentialStore(join(directory, "credentials.json"));
+    await store.modify("test", () => ({ accessToken: "provider-token", expiresAt: 4e12 }));
+    const auth = new SubscriptionAuth(store, [
+      {
+        ...provider,
+        async getModels() {
+          return [{ id: "model/test", endpoints: ["responses"] }];
+        },
+      },
+    ]);
+    running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "local-key" });
+    const dashboard = await fetch(running.url);
+    const cookie = dashboard.headers.get("set-cookie")?.split(";", 1)[0];
+    const headers = { cookie: cookie!, origin: running.url };
+
+    const configured = await fetch(`${running.url}/v1/codex/configure`, {
+      method: "POST",
+      headers,
+    });
+    expect(configured.status).toBe(200);
+    const configuredConfig = await readFile(config, "utf8");
+    expect(configuredConfig).toMatch(/^model_catalog_json = /m);
+    expect(configuredConfig).toMatch(/^model_provider = "aisubs-codex"$/m);
+    expect(configuredConfig).toContain('[profiles.work]\nmodel_provider = "openai"');
+    expect(JSON.parse(await readFile(catalog, "utf8"))).toMatchObject({
+      models: [{ slug: "test/model/test" }],
+    });
+
+    const restored = await fetch(`${running.url}/v1/codex/restore-official`, {
+      method: "POST",
+      headers,
+    });
+    expect(restored.status).toBe(200);
+    const restoredConfig = await readFile(config, "utf8");
+    expect(restoredConfig).not.toContain("aisubs-codex");
+    expect(restoredConfig).not.toContain("AISUBS_API_KEY");
+    expect(restoredConfig).toContain('[profiles.work]\nmodel_provider = "openai"');
   });
 
   test("coalesces simultaneous API key regeneration", async () => {

@@ -20,4 +20,18 @@ describe("account keys", () => {
     expect(nextAccountKey(sessions, "chatgpt")).toBe("account-3");
     expect(nextAccountKey(sessions, "grok")).toBe("default");
   });
+
+  test("does not reuse the key of an account awaiting reauthentication", () => {
+    expect(
+      nextAccountKey(
+        [
+          {
+            ...account("chatgpt", "default", false),
+            reauthRequired: true,
+          },
+        ],
+        "chatgpt",
+      ),
+    ).toBe("account-2");
+  });
 });

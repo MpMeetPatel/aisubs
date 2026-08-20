@@ -109,7 +109,7 @@ export async function sendWebResponse(reply: FastifyReply, upstream: Response): 
     await reply.send();
     return;
   }
-  await reply.send(Readable.fromWeb(upstream.body as never));
+  await reply.send(Readable.from(upstream.body));
 }
 
 function jsonResponse(body: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -148,6 +148,58 @@ function openAiModel(provider: ProviderId, model: ProviderModel) {
   };
 }
 
+function usableForCodex(model: ProviderModel): boolean {
+  return (model.endpoints ?? []).some((endpoint) => {
+    const normalized = endpoint.replace(/^\/?(?:v1\/)?/, "");
+    return (
+      ["responses", "chat/completions", "messages"].includes(normalized) ||
+      normalized.startsWith("models/")
+    );
+  });
+}
+
+function codexResponsesBody(
+  input: Record<string, unknown>,
+  model: string,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...input, model };
+  if (Array.isArray(body.input)) {
+    body.input = body.input
+      .filter(
+        (item): item is Record<string, unknown> =>
+          isRecord(item) &&
+          ["message", "function_call", "function_call_output"].includes(String(item.type)),
+      )
+      .map((item) => {
+        if (item.type === "message") {
+          const content = Array.isArray(item.content)
+            ? item.content
+                .filter(isRecord)
+                .map((part) => stringValue(part.text))
+                .filter((value): value is string => Boolean(value))
+                .join("")
+            : item.content;
+          return { type: "message", role: stringValue(item.role) ?? "user", content };
+        }
+        return item;
+      });
+  }
+  if (isRecord(body.reasoning) && body.reasoning.summary === "all_turns") {
+    // Codex can send `all_turns`, but Copilot's GPT-5 Responses endpoint only
+    // accepts `auto` (some model revisions also accept `current_turn`).
+    // `auto` is the common denominator across the connected model revisions.
+    body.reasoning = { ...body.reasoning, summary: "auto" };
+  }
+  if (!Array.isArray(body.tools) || body.tools.length === 0) {
+    // OpenAI Responses permits a default tool choice, but several upstream
+    // providers reject tool_choice unless an actual tools array is present.
+    delete body.tool_choice;
+  }
+  delete body.prompt_cache_retention;
+  delete body.include;
+  return body;
+}
+
 export async function handleSubscriptionAuthApi(
   auth: SubscriptionAuth,
   request: FastifyRequest,
@@ -155,13 +207,114 @@ export async function handleSubscriptionAuthApi(
 ): Promise<Response | null> {
   const url = new URL(request.url, "http://aisubs.local");
   const parts = routeSegments(url.pathname);
+  // Unified Codex-compatible router. Model ids use provider/model, while the
+  // account is selected from the first authenticated account exposing it.
+  if (parts[0] === "aisubs-codex" && parts[1] === "v1") {
+    if (request.method === "GET" && parts[2] === "models") {
+      const models = [];
+      const seen = new Set<string>();
+      for (const provider of auth.listProviders()) {
+        if (provider.id === "chatgpt") continue;
+        for (const account of await auth.listAccounts(provider.id)) {
+          const catalog = await auth.getModels(provider.id, account.accountKey).catch(() => null);
+          for (const model of catalog?.models ?? []) {
+            if (!usableForCodex(model)) continue;
+            const id = `${provider.id}/${model.id}`;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            models.push({ ...openAiModel(provider.id, model), id });
+          }
+        }
+      }
+      return jsonResponse({ object: "list", data: models, models });
+    }
+    if (request.method === "POST" && parts[2] === "responses") {
+      const raw = jsonBody(request);
+      const input = isRecord(raw) ? raw : {};
+      const requested = stringValue(input.model);
+      if (!requested) {
+        return jsonResponse(
+          { error: { message: "model must be provider/model", type: "invalid_request_error" } },
+          400,
+        );
+      }
+      const slash = requested.indexOf("/");
+      if (slash <= 0 || slash === requested.length - 1) {
+        return jsonResponse(
+          {
+            error: {
+              message: `Model "${requested}" must include its provider, for example "copilot/${requested}". No provider fallback was performed.`,
+              type: "invalid_request_error",
+              code: "invalid_model_id",
+            },
+          },
+          400,
+        );
+      }
+      const provider = requested.slice(0, slash) as ProviderId;
+      const model = requested.slice(slash + 1);
+      if (!auth.listProviders().some((candidate) => candidate.id === provider)) {
+        return jsonResponse(
+          {
+            error: {
+              message: `Model not found: ${requested}`,
+              type: "invalid_request_error",
+              code: "model_not_found",
+            },
+          },
+          404,
+        );
+      }
+      for (const account of await auth.listAccounts(provider)) {
+        const catalog = await auth.getModels(provider, account.accountKey).catch(() => null);
+        if (
+          !catalog?.models.some((candidate) => candidate.id === model && usableForCodex(candidate))
+        )
+          continue;
+        // Codex sends Responses-only history/metadata that subscription
+        // providers do not all understand. Keep the router's wire contract
+        // stable and pass each provider only portable input items.
+        const translated = codexResponsesBody(input, model);
+        const compatible = await proxyCompatible(
+          auth,
+          provider,
+          account.accountKey,
+          "responses",
+          Buffer.from(JSON.stringify(translated)),
+          requestHeaders(request),
+          signal,
+        );
+        if (compatible) return compatible;
+        return auth.proxy(provider, account.accountKey, "responses", {
+          method: "POST",
+          headers: requestHeaders(request),
+          body: JSON.stringify(translated),
+          signal,
+        });
+      }
+      return jsonResponse(
+        {
+          error: {
+            message: `Model not found: ${requested}`,
+            type: "invalid_request_error",
+            code: "model_not_found",
+          },
+        },
+        404,
+      );
+    }
+  }
   const account = accountPath(parts);
   if (account && request.method !== "OPTIONS") {
     if (account.versioned && request.method === "GET" && account.path === "models") {
       const catalog = await auth.getModels(account.provider, account.account);
+      const models = (catalog?.models ?? []).map((model) => openAiModel(account.provider, model));
       return jsonResponse({
         object: "list",
-        data: (catalog?.models ?? []).map((model) => openAiModel(account.provider, model)),
+        data: models,
+        // Codex's custom-provider catalog reader expects `models`, while
+        // OpenAI-compatible clients expect `data`. Keep both shapes.
+        models,
       });
     }
     if (account.versioned && request.method === "GET" && account.path.startsWith("models/")) {
@@ -200,7 +353,7 @@ export async function handleSubscriptionAuthApi(
     return auth.proxy(account.provider, account.account, path, {
       method: request.method,
       headers,
-      body: body.length ? (body as unknown as BodyInit) : undefined,
+      body: body.length ? new Uint8Array(body) : undefined,
       signal,
     });
   }
@@ -402,7 +555,7 @@ export function createApiApp(options: SubscriptionAuthServerOptions): FastifyIns
     const statusCode = isRecord(error) ? numberValue(error.statusCode) : undefined;
     const status = statusCode && statusCode >= 400 ? statusCode : 400;
     const code = isRecord(error) ? stringValue(error.code) : undefined;
-    const openAi = request.url.startsWith("/aisubs/");
+    const openAi = request.url.startsWith("/aisubs/") || request.url.startsWith("/aisubs-codex/");
     await reply.code(status).send(
       openAi
         ? {

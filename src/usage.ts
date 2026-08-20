@@ -425,7 +425,7 @@ export function parseGrokUsage(
     ],
     note:
       percentUsed == null
-        ? "For this Free account, xAI provides only the reset time, not current usage or remaining allowance. Access may stop before the reset if the included allowance is exhausted."
+        ? "xAI provides only the reset time for this account, not current usage or remaining allowance. Access may stop before the reset if the included allowance is exhausted."
         : undefined,
   };
 }

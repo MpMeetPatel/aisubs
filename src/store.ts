@@ -8,6 +8,31 @@ import { abortableDelay, isRecord } from "./utils.js";
 const LOCK_TIMEOUT_MS = 15_000;
 const LOCK_STALE_MS = 120_000;
 
+function isCredential(value: unknown): value is OAuthCredential {
+  if (!isRecord(value) || typeof value.accessToken !== "string") return false;
+  if (typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt)) return false;
+  if (value.refreshToken != null && typeof value.refreshToken !== "string") return false;
+  if (
+    value.account != null &&
+    (!isRecord(value.account) ||
+      ![value.account.id, value.account.label, value.account.email, value.account.plan].every(
+        (item) => item == null || typeof item === "string",
+      ))
+  )
+    return false;
+  return (
+    value.metadata == null ||
+    (isRecord(value.metadata) &&
+      Object.values(value.metadata).every(
+        (item) =>
+          item == null ||
+          typeof item === "string" ||
+          typeof item === "number" ||
+          typeof item === "boolean",
+      ))
+  );
+}
+
 export function defaultAiSubsDataDir(): string {
   const override = process.env.AISUBS_DATA_DIR?.trim();
   return override ? resolve(override) : join(homedir(), ".aisubs");
@@ -62,7 +87,13 @@ export class FileApiKeyStore {
 async function readEnvelope(file: string): Promise<Record<string, OAuthCredential>> {
   try {
     const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    return isRecord(parsed) ? (parsed as Record<string, OAuthCredential>) : {};
+    if (!isRecord(parsed)) throw new Error("Credential store must contain a JSON object");
+    const credentials: Record<string, OAuthCredential> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!isCredential(value)) throw new Error(`Credential store entry ${key} is invalid`);
+      credentials[key] = value;
+    }
+    return credentials;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw error;

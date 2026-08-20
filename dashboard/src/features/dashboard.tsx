@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  SlidersHorizontal,
   Terminal,
   X,
 } from "lucide-react";
@@ -234,6 +235,11 @@ interface RequestLog {
   error?: string;
 }
 
+interface CodexResult {
+  message: string;
+  error: boolean;
+}
+
 function LogsDialog({ onClose }: { onClose(): void }) {
   const [logs, setLogs] = useState<RequestLog[]>([]);
   const [connected, setConnected] = useState(false);
@@ -363,30 +369,76 @@ export function Dashboard({
   error: string | null;
   refresh(): void;
 }) {
-  const [connect, setConnect] = useState<Provider | "picker" | null>(null);
+  const [connect, setConnect] = useState<Provider | null>(null);
   const [reconnect, setReconnect] = useState<Session | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [changingApiKey, setChangingApiKey] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [configuringCodex, setConfiguringCodex] = useState(false);
+  const [showCodexDialog, setShowCodexDialog] = useState(false);
+  const [codexResult, setCodexResult] = useState<CodexResult | null>(null);
   const connected = sessions.filter((session) => session.authenticated || session.reauthRequired);
   const activeProviders = new Set(connected.map((session) => session.provider)).size;
   const openCodeProviders = providers.filter((provider) => provider.id.startsWith("opencode-"));
   const otherProviders = providers.filter((provider) => !provider.id.startsWith("opencode-"));
+  const displayedError = error ?? actionError;
   useEffect(() => {
-    void api<{ apiKey: string }>("/v1/api-key").then((result) => setApiKey(result.apiKey));
+    void api<{ apiKey: string }>("/v1/api-key")
+      .then((result) => setApiKey(result.apiKey))
+      .catch((nextError) =>
+        setActionError(nextError instanceof Error ? nextError.message : String(nextError)),
+      );
   }, []);
 
   const regenerateApiKey = async () => {
     if (!confirm("Regenerate the API key? Apps using the current key will stop working.")) return;
     setChangingApiKey(true);
+    setActionError(null);
     try {
       const result = await api<{ apiKey: string }>("/v1/api-key/regenerate", { method: "POST" });
       setApiKey(result.apiKey);
       setShowApiKey(true);
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setChangingApiKey(false);
+    }
+  };
+  const configureCodex = async () => {
+    setConfiguringCodex(true);
+    setCodexResult(null);
+    try {
+      const result = await api<{ output?: string }>("/v1/codex/configure", { method: "POST" });
+      setCodexResult({ message: result.output || "Codex configuration updated.", error: false });
+    } catch (nextError) {
+      setCodexResult({
+        message: nextError instanceof Error ? nextError.message : String(nextError),
+        error: true,
+      });
+    } finally {
+      setConfiguringCodex(false);
+    }
+  };
+  const restoreOfficialCodex = async () => {
+    setConfiguringCodex(true);
+    try {
+      const result = await api<{ output?: string }>("/v1/codex/restore-official", {
+        method: "POST",
+      });
+      setCodexResult({
+        message: `${result.output || "Official Codex mode restored."}\nRestart Codex Desktop to reload it.`,
+        error: false,
+      });
+    } catch (nextError) {
+      setCodexResult({
+        message: nextError instanceof Error ? nextError.message : String(nextError),
+        error: true,
+      });
+    } finally {
+      setConfiguringCodex(false);
     }
   };
   return (
@@ -419,15 +471,18 @@ export function Dashboard({
             <Terminal {...icon} /> Account logs
           </button>
           <button
-            className={`${primaryButton} w-full sm:w-auto`}
+            className={secondaryButton}
             type="button"
-            onClick={() => setConnect("picker")}
+            onClick={() => {
+              setCodexResult(null);
+              setShowCodexDialog(true);
+            }}
           >
-            <Plus {...icon} /> Add account
+            <SlidersHorizontal {...icon} /> Configure Codex
           </button>
         </div>
       </section>
-      {error ? <ErrorBanner>{error}</ErrorBanner> : null}
+      {displayedError ? <ErrorBanner>{displayedError}</ErrorBanner> : null}
       <section
         className={`${panel} mb-3 grid gap-3 p-4 md:grid-cols-[minmax(220px,1fr)_minmax(240px,380px)_auto] md:items-center`}
         aria-label="Local API access"
@@ -460,7 +515,7 @@ export function Dashboard({
             onClick={() => void regenerateApiKey()}
             disabled={changingApiKey}
           >
-            <RefreshCw className={changingApiKey ? "spin" : ""} size={15} /> Regenerate
+            <RefreshCw className={changingApiKey ? "animate-spin" : ""} size={15} /> Regenerate
           </button>
         </div>
       </section>
@@ -514,7 +569,7 @@ export function Dashboard({
         <ConnectDialog
           providers={providers}
           sessions={sessions}
-          initial={connect === "picker" ? undefined : connect}
+          initial={connect}
           onClose={() => setConnect(null)}
           onConnected={() => {
             setConnect(null);
@@ -540,6 +595,107 @@ export function Dashboard({
         <UseGuide providers={providers} accounts={connected} onClose={() => setShowGuide(false)} />
       ) : null}
       {showLogs ? <LogsDialog onClose={() => setShowLogs(false)} /> : null}
+      {showCodexDialog ? (
+        <div
+          className="fixed inset-0 z-30 grid place-items-center bg-zinc-950/35 p-4 backdrop-blur-sm"
+          role="presentation"
+          onMouseDown={(event) => event.target === event.currentTarget && setShowCodexDialog(false)}
+        >
+          <section
+            className="w-full max-w-[560px] rounded-xl border border-zinc-300 bg-white p-5 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="codex-config-title"
+          >
+            <header className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="m-0 text-lg tracking-tight" id="codex-config-title">
+                  Configure Codex Desktop
+                </h2>
+                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                  Choose whether Codex should use your connected AISubs models or its native OpenAI
+                  models.
+                </p>
+              </div>
+              <button
+                className={iconButton}
+                type="button"
+                onClick={() => setShowCodexDialog(false)}
+                aria-label="Close"
+              >
+                <X {...icon} />
+              </button>
+            </header>
+            {codexResult ? (
+              <div className="mt-5 grid gap-3">
+                <div
+                  className={`rounded-lg border p-3 text-xs ${codexResult.error ? "border-red-500/30 bg-red-500/10 text-red-800 dark:text-red-200" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"}`}
+                >
+                  {codexResult.error
+                    ? "Configuration failed. No successful reload was reported."
+                    : "Configuration finished. Fully restart Codex Desktop to reload the catalog."}
+                </div>
+                <pre className="max-h-48 overflow-auto rounded-lg bg-zinc-950 p-3 text-[11px] whitespace-pre-wrap text-zinc-200">
+                  {codexResult.message}
+                </pre>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    className={secondaryButton}
+                    type="button"
+                    onClick={() => void restoreOfficialCodex()}
+                    disabled={configuringCodex}
+                  >
+                    Restore official mode
+                  </button>
+                  <button
+                    className={primaryButton}
+                    type="button"
+                    onClick={() => setShowCodexDialog(false)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-4">
+                <ul className="m-0 grid gap-2 pl-5 text-xs text-zinc-700 dark:text-zinc-200">
+                  <li>Fetch every connected account’s live model catalog.</li>
+                  <li>Skip ChatGPT entries and unsupported endpoint-less models.</li>
+                  <li>Write only callable AISubs models to Codex’s active catalog.</li>
+                  <li>Keep official ChatGPT models available through Restore official mode.</li>
+                  <li>
+                    Update <code>~/.codex/config.toml</code> and the custom catalog path.
+                  </li>
+                </ul>
+                <p className="m-0 text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Codex has one active provider at a time. Configure AISubs to use connected
+                  subscriptions; restore official mode to return to native ChatGPT models. Restart
+                  Codex Desktop after either action.
+                </p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    className={secondaryButton}
+                    type="button"
+                    onClick={() => void restoreOfficialCodex()}
+                    disabled={configuringCodex}
+                  >
+                    Restore official Codex models
+                  </button>
+                  <button
+                    className={primaryButton}
+                    type="button"
+                    onClick={() => void configureCodex()}
+                    disabled={configuringCodex}
+                  >
+                    <SlidersHorizontal size={15} />{" "}
+                    {configuringCodex ? "Configuring…" : "Use AISubs models in Codex"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

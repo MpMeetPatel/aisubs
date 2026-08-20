@@ -76,18 +76,6 @@ describe("SubscriptionAuth", () => {
     expect(JSON.stringify(summary)).not.toContain("refresh-secret");
   });
 
-  test("normalizes account-scoped model results", async () => {
-    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [
-      adapter({ getModels: async () => [{ id: "model-1", contextWindow: 128_000 }] }),
-    ]);
-    await (await auth.account("test", "work").signIn()).wait();
-    await expect(auth.account("test", "work").getModels()).resolves.toMatchObject({
-      provider: "test",
-      accountKey: "work",
-      models: [{ id: "model-1", contextWindow: 128_000 }],
-    });
-  });
-
   test("caches private metadata briefly and clears it when the account changes", async () => {
     const getUsage = vi.fn(async () => ({ meters: [] }));
     const getModels = vi.fn(async () => [{ id: "model-1" }]);
@@ -134,18 +122,18 @@ describe("SubscriptionAuth", () => {
     expect(getModels).toHaveBeenCalledTimes(1);
   });
 
-  test("deduplicates concurrent refresh through the credential store", async () => {
+  test("deduplicates concurrent refresh when the provider reuses its access token", async () => {
     const store = new MemoryCredentialStore();
     await store.modify("test", () => expired());
     const refresh = vi.fn(async () => ({
-      accessToken: "fresh",
+      accessToken: "old",
       refreshToken: "rotated",
       expiresAt: Date.now() + 60_000,
     }));
     const auth = new SubscriptionAuth(store, [adapter({ refresh })]);
     await expect(
       Promise.all(Array.from({ length: 20 }, () => auth.getAccessToken("test"))),
-    ).resolves.toEqual(Array(20).fill("fresh"));
+    ).resolves.toEqual(Array(20).fill("old"));
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 

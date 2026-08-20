@@ -101,10 +101,13 @@ export function ConnectDialog({
     provider &&
     sessions.some(
       (session) =>
-        session.authenticated &&
+        (session.authenticated || session.reauthRequired) &&
         session.provider === provider.id &&
         session.accountKey === normalizedAccount,
     ),
+  );
+  const missingRequiredField = provider?.loginFields?.some(
+    (field) => field.required && !fields[field.name]?.trim(),
   );
 
   return (
@@ -164,9 +167,11 @@ export function ConnectDialog({
                 ? "Account connected"
                 : login.state === "failed"
                   ? "Could not connect"
-                  : "Finish signing in"}
+                  : login.state === "cancelled"
+                    ? "Sign-in cancelled"
+                    : "Finish signing in"}
             </h3>
-            {login.prompt.userCode ? (
+            {login.state === "pending" && login.prompt.userCode ? (
               <>
                 <p className="mb-[18px] max-w-[390px] text-zinc-600 dark:text-zinc-300">
                   Open the provider page and enter this one-time code.
@@ -262,7 +267,7 @@ export function ConnectDialog({
             <button
               className={`${primaryButton} w-full`}
               type="button"
-              disabled={busy || !normalizedAccount || duplicateAccount}
+              disabled={busy || !normalizedAccount || duplicateAccount || missingRequiredField}
               onClick={() => void start()}
             >
               {busy ? <RefreshCw className="animate-spin" {...icon} /> : <Link2 {...icon} />}{" "}

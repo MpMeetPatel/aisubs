@@ -3,7 +3,10 @@ import type { ProviderId, Session } from "./types.js";
 export function nextAccountKey(sessions: readonly Session[], provider: ProviderId): string {
   const used = new Set(
     sessions
-      .filter((session) => session.provider === provider && session.authenticated)
+      .filter(
+        (session) =>
+          session.provider === provider && (session.authenticated || session.reauthRequired),
+      )
       .map((session) => session.accountKey),
   );
   if (!used.has("default")) return "default";

@@ -416,6 +416,28 @@ export function copilotProvider(options: CopilotProviderOptions = {}): ProviderA
       const auto = typeof raw.model === "string" && isAutoModel(raw.model);
       const session = auto ? await routeAuto(raw, credential, request.signal) : null;
       if (isResponses && raw.store === undefined) raw.store = false;
+      if (isResponses && isRecord(raw.reasoning) && raw.reasoning.summary === "all_turns") {
+        // Codex's cross-turn value is not accepted by Copilot GPT-5 models.
+        raw.reasoning = { ...raw.reasoning, summary: "auto" };
+      }
+      if (isResponses && (!Array.isArray(raw.tools) || raw.tools.length === 0)) {
+        delete raw.tool_choice;
+      }
+      if (isResponses) {
+        delete raw.include;
+        delete raw.prompt_cache_retention;
+        if (Array.isArray(raw.input)) {
+          for (const item of raw.input) {
+            if (
+              isRecord(item) &&
+              isRecord(item.reasoning) &&
+              item.reasoning.summary === "all_turns"
+            ) {
+              item.reasoning = { ...item.reasoning, summary: "auto" };
+            }
+          }
+        }
+      }
       if (isResponses && raw.store !== true && Array.isArray(raw.input)) {
         raw.input = raw.input.flatMap((item) => {
           if (!isRecord(item)) return [item];

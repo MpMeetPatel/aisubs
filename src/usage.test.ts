@@ -171,7 +171,7 @@ describe("normalized provider usage", () => {
       plan: "Free",
       account: { id: "free-user", plan: "Free" },
       facts: [{ label: "Grok Build access", value: "Included" }],
-      note: "For this Free account, xAI provides only the reset time, not current usage or remaining allowance. Access may stop before the reset if the included allowance is exhausted.",
+      note: "xAI provides only the reset time for this account, not current usage or remaining allowance. Access may stop before the reset if the included allowance is exhausted.",
     });
 
     expect(
@@ -180,7 +180,10 @@ describe("normalized provider usage", () => {
         { subscriptionTier: "XPremiumPlus" },
         { subscription_tier_display: "Free" },
       ),
-    ).toMatchObject({ plan: "X Premium+" });
+    ).toMatchObject({
+      plan: "X Premium+",
+      note: "xAI provides only the reset time for this account, not current usage or remaining allowance. Access may stop before the reset if the included allowance is exhausted.",
+    });
 
     expect(
       parseGrokUsage(

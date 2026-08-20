@@ -1,9 +1,11 @@
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import type { Server, ServerResponse } from "node:http";
+import { homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SubscriptionAuth } from "./auth.js";
@@ -86,6 +88,50 @@ async function responseFailure(response: Response): Promise<string | undefined> 
   return (message ?? `HTTP ${response.status}`).slice(0, 2_000);
 }
 
+function runCodexCatalog(env: NodeJS.ProcessEnv): Promise<{ output: string; code: number }> {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "scripts",
+    "codex-catalog.mjs",
+  );
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [script], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolvePromise({ output: output.trim(), code: code ?? 1 }));
+  });
+}
+
+function removeRootSetting(config: string, pattern: RegExp): string {
+  const firstTable = config.search(/^\[/m);
+  const rootEnd = firstTable < 0 ? config.length : firstTable;
+  return `${config.slice(0, rootEnd).replace(pattern, "")}${config.slice(rootEnd)}`;
+}
+
+async function restoreOfficialCodexConfig(): Promise<string> {
+  const path = process.env.CODEX_CONFIG ?? join(homedir(), ".codex", "config.toml");
+  const backup = `${path}.aisubs-backup`;
+  const config = await readFile(path, "utf8").catch(() => null);
+  if (!config) {
+    return "No existing Codex config found at ~/.codex/config.toml";
+  }
+  await access(backup).catch(() => writeFile(backup, config, { mode: 0o600 }));
+  let restored = removeRootSetting(config, /^model_catalog_json\s*=.*\n?/m);
+  restored = removeRootSetting(restored, /^model_provider\s*=\s*"aisubs-codex"\s*\n?/m);
+  restored = restored
+    .replace(/(?:^|\n)\[model_providers\.aisubs-codex\][\s\S]*?(?=\n\[|$)/, "")
+    .replace(/^AISUBS_API_KEY\s*=.*\n?/m, "");
+  await writeFile(path, restored, { mode: 0o600 });
+  return `Restored official Codex mode. Backup: ${backup}`;
+}
+
 export interface SubscriptionAuthDashboardOptions {
   auth: SubscriptionAuth;
   apiKey?: string;
@@ -166,7 +212,7 @@ export async function createSubscriptionAuthDashboardServer(
       await reply.code(421).send({ error: "Invalid local host" });
       return;
     }
-    if (request.url.startsWith("/aisubs/")) {
+    if (request.url.startsWith("/aisubs/") || request.url.startsWith("/aisubs-codex/")) {
       const startedAt = performance.now();
       reply.raw.once("finish", () => {
         const path = new URL(request.url, origin).pathname;
@@ -209,7 +255,9 @@ export async function createSubscriptionAuthDashboardServer(
         sameSecret(value, apiKey),
       );
       const cookieAuthenticated = sameSecret(cookie(request, "aisubs_session"), sessionToken);
-      const apiRoute = ["v1", "aisubs"].includes(routeSegments(url.pathname)[0] ?? "");
+      const apiRoute = ["v1", "aisubs", "aisubs-codex"].includes(
+        routeSegments(url.pathname)[0] ?? "",
+      );
       if (apiRoute && !bearerAuthenticated && !cookieAuthenticated) {
         await reply.code(401).send({
           error: {
@@ -243,6 +291,23 @@ export async function createSubscriptionAuthDashboardServer(
         }
         if (request.method === "GET" && url.pathname === "/v1/api-key") {
           await reply.send({ apiKey });
+          return;
+        }
+        if (request.method === "POST" && url.pathname === "/v1/codex/configure") {
+          const result = await runCodexCatalog({
+            ...process.env,
+            AISUBS_API_KEY: apiKey,
+            AISUBS_URL: `http://${request.headers.host ?? `${urlHost(host)}:${options.port ?? 4319}`}`,
+          });
+          if (result.code !== 0) {
+            await reply.code(500).send({ error: result.output || "Codex configuration failed" });
+            return;
+          }
+          await reply.send({ ok: true, output: result.output });
+          return;
+        }
+        if (request.method === "POST" && url.pathname === "/v1/codex/restore-official") {
+          await reply.send({ ok: true, output: await restoreOfficialCodexConfig() });
           return;
         }
         if (request.method === "POST" && url.pathname === "/v1/api-key/regenerate") {

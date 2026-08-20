@@ -28,7 +28,9 @@ function listeningPids(port) {
 async function stopExistingDashboard() {
   const port = configuredPort();
   if (!port) return;
-  const health = await fetch(`http://127.0.0.1:${port}/health`)
+  const health = await fetch(`http://127.0.0.1:${port}/health`, {
+    signal: AbortSignal.timeout(1_000),
+  })
     .then(async (response) => ({
       body: await response.json(),
       service: response.headers.get("x-aisubs-service"),
@@ -42,9 +44,14 @@ async function stopExistingDashboard() {
     health.service === "aisubs" && Number.isSafeInteger(reportedPid) && reportedPid > 0;
   for (const pid of verifiedPid ? [reportedPid] : listeningPids(port)) {
     if (!verifiedPid) {
-      const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
-        encoding: "utf8",
-      });
+      let command;
+      try {
+        command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+          encoding: "utf8",
+        });
+      } catch {
+        continue;
+      }
       if (!/dist\/cli\.js dashboard(?:\s|$)/.test(command)) continue;
     }
     console.log(`Restarting the existing AISubs dashboard on port ${port}...`);
@@ -96,8 +103,12 @@ let previous = (await snapshot("dist")).sort().join("\n");
 let pending = previous;
 let dashboard = run();
 let restarting = false;
+let stopping = false;
+let watchTimer;
 
 function stop() {
+  stopping = true;
+  clearInterval(watchTimer);
   dashboard.kill("SIGTERM");
   for (const child of children) child.kill("SIGTERM");
 }
@@ -105,9 +116,10 @@ function stop() {
 process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
 
-setInterval(async () => {
-  if (restarting) return;
+watchTimer = setInterval(async () => {
+  if (stopping || restarting) return;
   const current = (await snapshot("dist")).sort().join("\n");
+  if (stopping) return;
   if (current === previous) return;
   if (current !== pending) {
     pending = current;
@@ -118,6 +130,7 @@ setInterval(async () => {
   restarting = true;
   dashboard.kill("SIGTERM");
   await new Promise((resolve) => dashboard.once("close", resolve));
+  if (stopping) return;
   dashboard = run();
   restarting = false;
 }, 500);

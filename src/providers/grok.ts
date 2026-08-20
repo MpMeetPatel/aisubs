@@ -141,8 +141,11 @@ export function grokProvider(options: GrokProviderOptions = {}): ProviderAdapter
         signal,
       });
       if (!response.ok) {
-        const raw = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new GrokTokenError(response.status, stringValue(raw.error));
+        const raw: unknown = await response.json().catch(() => null);
+        throw new GrokTokenError(
+          response.status,
+          isRecord(raw) ? stringValue(raw.error) : undefined,
+        );
       }
       return credentialFromTokens(await responseJson(response, "Grok token refresh"), credential);
     },

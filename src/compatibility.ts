@@ -462,7 +462,7 @@ function dataUri(url: string): { mediaType: string; data: string } | null {
 
 function chatContent(parts: ContentPart[]): unknown {
   if (parts.every((part) => part.type === "text"))
-    return parts.map((part) => (part as TextPart).text).join("");
+    return parts.map((part) => (part.type === "text" ? part.text : "")).join("");
   return parts.map((part) => {
     if (part.type === "text") return { type: "text", text: part.text };
     if (part.type === "image")
@@ -925,7 +925,7 @@ function parseGoogleResult(raw: Record<string, unknown>, model: string): Complet
   };
 }
 
-function resultToChat(result: CompletionResult): Record<string, unknown> {
+function resultToChat(result: CompletionResult) {
   return {
     id: result.id.startsWith("chatcmpl_") ? result.id : `chatcmpl_${result.id}`,
     object: "chat.completion",
@@ -937,10 +937,8 @@ function resultToChat(result: CompletionResult): Record<string, unknown> {
         message: {
           role: "assistant",
           content:
-            result.content
-              .filter((part) => part.type === "text")
-              .map((part) => (part as TextPart).text)
-              .join("") || null,
+            result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("") ||
+            null,
           ...(result.refusal ? { refusal: result.refusal } : {}),
           ...(result.toolCalls.length
             ? {
@@ -973,29 +971,36 @@ function resultToChat(result: CompletionResult): Record<string, unknown> {
   };
 }
 
-function resultToResponses(result: CompletionResult): Record<string, unknown> {
-  const output: unknown[] = [];
-  const textParts = result.content
-    .filter((part) => part.type === "text")
-    .map((part) => ({ type: "output_text", text: (part as TextPart).text, annotations: [] }));
-  if (result.refusal) textParts.push({ type: "refusal", refusal: result.refusal } as never);
-  if (textParts.length)
-    output.push({
-      id: `msg_${crypto.randomUUID()}`,
-      type: "message",
-      status: "completed",
-      role: "assistant",
-      content: textParts,
-    });
-  for (const call of result.toolCalls)
-    output.push({
+function resultToResponses(result: CompletionResult) {
+  const textParts = [
+    ...result.content.flatMap((part) =>
+      part.type === "text"
+        ? [{ type: "output_text" as const, text: part.text, annotations: [] }]
+        : [],
+    ),
+    ...(result.refusal ? [{ type: "refusal" as const, refusal: result.refusal }] : []),
+  ];
+  const output = [
+    ...(textParts.length
+      ? [
+          {
+            id: `msg_${crypto.randomUUID()}`,
+            type: "message" as const,
+            status: "completed",
+            role: "assistant",
+            content: textParts,
+          },
+        ]
+      : []),
+    ...result.toolCalls.map((call) => ({
       id: `fc_${crypto.randomUUID()}`,
-      type: "function_call",
+      type: "function_call" as const,
       status: "completed",
       call_id: call.id,
       name: call.name,
       arguments: call.arguments,
-    });
+    })),
+  ];
   return {
     id: result.id.startsWith("resp_") ? result.id : `resp_${result.id}`,
     object: "response",
@@ -1009,8 +1014,7 @@ function resultToResponses(result: CompletionResult): Record<string, unknown> {
     model: result.model,
     output,
     output_text: result.content
-      .filter((part) => part.type === "text")
-      .map((part) => (part as TextPart).text)
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join(""),
     ...(result.usage
       ? {
@@ -1026,17 +1030,16 @@ function resultToResponses(result: CompletionResult): Record<string, unknown> {
   };
 }
 
-function resultToAnthropic(result: CompletionResult): Record<string, unknown> {
-  const content: unknown[] = result.content
-    .filter((part) => part.type === "text")
-    .map((part) => ({ type: "text", text: (part as TextPart).text }));
-  for (const call of result.toolCalls)
-    content.push({
-      type: "tool_use",
-      id: call.id,
-      name: call.name,
-      input: JSON.parse(call.arguments || "{}"),
-    });
+function resultToAnthropic(result: CompletionResult) {
+  const content = [
+    ...result.content.flatMap((part) =>
+      part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
+    ),
+    ...result.toolCalls.map((call) => {
+      const input: unknown = JSON.parse(call.arguments || "{}");
+      return { type: "tool_use" as const, id: call.id, name: call.name, input };
+    }),
+  ];
   return {
     id: result.id.startsWith("msg_") ? result.id : `msg_${result.id}`,
     type: "message",
@@ -1064,7 +1067,7 @@ function resultToAnthropic(result: CompletionResult): Record<string, unknown> {
   };
 }
 
-function resultToGoogle(result: CompletionResult): Record<string, unknown> {
+function resultToGoogle(result: CompletionResult) {
   return {
     responseId: result.id,
     modelVersion: result.model,
@@ -1073,9 +1076,9 @@ function resultToGoogle(result: CompletionResult): Record<string, unknown> {
         content: {
           role: "model",
           parts: [
-            ...result.content
-              .filter((part) => part.type === "text")
-              .map((part) => ({ text: (part as TextPart).text })),
+            ...result.content.flatMap((part) =>
+              part.type === "text" ? [{ text: part.text }] : [],
+            ),
             ...result.toolCalls.map((call) => ({
               functionCall: { name: call.name, args: JSON.parse(call.arguments || "{}") },
             })),
@@ -1121,8 +1124,8 @@ function sse(frames: unknown[]): Response {
 
 function streamChat(result: CompletionResult): Response {
   const base = resultToChat(result);
-  const choice = (base.choices as Array<Record<string, unknown>>)[0]!;
-  const message = choice.message as Record<string, unknown>;
+  const choice = base.choices[0]!;
+  const message = choice.message;
   const chunk = (delta: unknown, finish: unknown = null, includeUsage = false) => ({
     id: base.id,
     object: "chat.completion.chunk",
@@ -1134,10 +1137,7 @@ function streamChat(result: CompletionResult): Response {
   const frames: unknown[] = [chunk({ role: "assistant", content: "" })];
   if (typeof message.content === "string" && message.content)
     frames.push(chunk({ content: message.content }));
-  for (const [index, call] of (Array.isArray(message.tool_calls)
-    ? message.tool_calls
-    : []
-  ).entries())
+  for (const [index, call] of (message.tool_calls ?? []).entries())
     frames.push(chunk({ tool_calls: [{ index, ...call }] }));
   frames.push(chunk({}, choice.finish_reason, true), "data: [DONE]\n\n");
   return sse(frames);
@@ -1331,12 +1331,10 @@ function streamResponses(result: CompletionResult): Response {
   const frames: unknown[] = [
     { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
   ];
-  for (const [outputIndex, item] of (response.output as Array<Record<string, unknown>>).entries()) {
+  for (const [outputIndex, item] of response.output.entries()) {
     frames.push({ type: "response.output_item.added", output_index: outputIndex, item });
     if (item.type === "message") {
-      for (const [contentIndex, part] of (
-        item.content as Array<Record<string, unknown>>
-      ).entries()) {
+      for (const [contentIndex, part] of item.content.entries()) {
         frames.push({
           type: "response.content_part.added",
           item_id: item.id,
@@ -1394,7 +1392,7 @@ function streamAnthropic(result: CompletionResult): Response {
       usage: { input_tokens: result.usage?.input ?? 0, output_tokens: 0 },
     },
   });
-  for (const [index, block] of (message.content as Array<Record<string, unknown>>).entries()) {
+  for (const [index, block] of message.content.entries()) {
     event("content_block_start", {
       type: "content_block_start",
       index,

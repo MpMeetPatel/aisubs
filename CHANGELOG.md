@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 - 2026-08-20
+
+- Add dashboard-managed Codex Desktop integration with callable model discovery,
+  `provider/model` routing, and an option to restore the official Codex provider.
+- Harden concurrent token refresh, reauthentication account selection, credential
+  file validation, Realtime startup, and development-server shutdown behavior.
+- Fix stale dashboard data, failed-action feedback, provider-specific examples,
+  Codex configuration errors, model deduplication, and protocol compatibility
+  edge cases.
+- Remove redundant tests and unsafe internal type erasure while retaining focused
+  regression coverage for the corrected behavior.
+
 ## 0.3.0 - 2026-08-16
 
 - Add a universal OpenAI-compatible Chat Completions surface with translation

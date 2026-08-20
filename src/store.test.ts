@@ -45,12 +45,13 @@ describe("FileCredentialStore", () => {
   test("does not overwrite a corrupted credential file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "subscription-auth-corrupt-"));
     const file = join(directory, "credentials.json");
-    await writeFile(file, "not-json");
+    const corrupted = '{"test":{"accessToken":42,"expiresAt":"later"}}';
+    await writeFile(file, corrupted);
     const store = new FileCredentialStore(file);
     await expect(
       store.modify("test", () => ({ accessToken: "new", expiresAt: 1 })),
     ).rejects.toThrow();
-    expect(await readFile(file, "utf8")).toBe("not-json");
+    expect(await readFile(file, "utf8")).toBe(corrupted);
   });
 
   test("supports account keys longer than a filesystem filename", async () => {

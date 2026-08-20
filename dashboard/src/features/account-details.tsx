@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   formatDate,
@@ -82,12 +82,21 @@ export function AccountDetails({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [disconnect, setDisconnect] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [reconnect, setReconnect] = useState(false);
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
-    if (!provider) return;
+    const generation = ++loadGeneration.current;
+    if (!provider) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
+    setCredential(null);
+    setUsage(null);
+    setModels(null);
     const suffix = `account=${encodeURIComponent(route.account)}`;
     const [details, nextUsage, nextModels] = await Promise.allSettled([
       api<CredentialSummary>(`/v1/auth/${provider.id}/details?${suffix}`),
@@ -98,6 +107,7 @@ export function AccountDetails({
         ? api<ProviderModels>(`/v1/models/${provider.id}?${suffix}`)
         : Promise.resolve(null),
     ]);
+    if (generation !== loadGeneration.current) return;
     if (details.status === "fulfilled") setCredential(details.value);
     else
       setError(details.reason instanceof Error ? details.reason.message : String(details.reason));
@@ -116,13 +126,14 @@ export function AccountDetails({
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => setQuery(""), [route.account, route.provider]);
   const identity = usage?.account ?? credential?.account;
   const filteredModels = (models?.models ?? []).filter((model) =>
     `${model.name ?? ""} ${model.id} ${model.description ?? ""}`
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
-  const localBase = `${location.origin}/aisubs/${encodeURIComponent(route.provider)}/${encodeURIComponent(route.account)}`;
+  const localBase = `${location.origin}/aisubs/${encodeURIComponent(route.provider)}/${encodeURIComponent(route.account)}/v1`;
   const usageFacts = [
     ...(usage?.facts ?? []),
     ...(usage?.resetCredits
@@ -194,7 +205,7 @@ export function AccountDetails({
             onClick={() => void load()}
             disabled={loading}
           >
-            <RefreshCw className={loading ? "spin" : ""} {...icon} /> Refresh details
+            <RefreshCw className={loading ? "animate-spin" : ""} {...icon} /> Refresh details
           </button>
           <button
             className={`${iconButton} hover:border-red-500/50 hover:text-red-600 dark:hover:text-red-400`}
@@ -506,7 +517,7 @@ export function AccountDetails({
               </div>
             ) : (
               <p className="m-0 p-[18px] text-xs text-zinc-600 dark:text-zinc-300">
-                {models
+                {query
                   ? "No models match this search."
                   : "This provider did not return an account-specific model catalog."}
               </p>
@@ -541,16 +552,24 @@ export function AccountDetails({
               <button
                 className={dangerButton}
                 type="button"
-                onClick={() =>
+                disabled={disconnecting}
+                onClick={() => {
+                  setDisconnecting(true);
                   void api(`/v1/auth/${provider.id}?account=${encodeURIComponent(route.account)}`, {
                     method: "DELETE",
-                  }).then(() => {
-                    refreshAccounts();
-                    go("/");
                   })
-                }
+                    .then(() => {
+                      refreshAccounts();
+                      go("/");
+                    })
+                    .catch((nextError) => {
+                      setDisconnect(false);
+                      setError(nextError instanceof Error ? nextError.message : String(nextError));
+                    })
+                    .finally(() => setDisconnecting(false));
+                }}
               >
-                Disconnect
+                {disconnecting ? "Disconnecting…" : "Disconnect"}
               </button>
             </div>
           </section>

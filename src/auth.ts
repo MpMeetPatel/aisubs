@@ -260,7 +260,7 @@ export class SubscriptionAuth {
     delete providerOptions.replace;
     const login: ProviderLogin = await adapter.startLogin(abort.signal, providerOptions);
     const id = crypto.randomUUID();
-    const record = {} as AttemptRecord;
+    let record: AttemptRecord;
     const promise = login.complete
       .then(async (credential) => {
         const saved = await this.store.modify(scope, (current) => {
@@ -281,7 +281,7 @@ export class SubscriptionAuth {
         throw error;
       });
     void promise.catch(() => {});
-    Object.assign(record, {
+    record = {
       id,
       provider,
       accountKey,
@@ -290,7 +290,7 @@ export class SubscriptionAuth {
       error: null,
       abort,
       promise,
-    });
+    };
     this.attempts.set(id, record);
     void promise.then(
       () => this.expireLoginAttempt(id),
@@ -405,7 +405,10 @@ export class SubscriptionAuth {
     const refreshed = await this.store.modify(scope, async (current) => {
       if (!current) throw new Error(`Not authenticated with ${provider} account ${accountKey}`);
       if (this.generation(scope) !== epoch) return current;
-      if (current.accessToken !== observed.accessToken && current.expiresAt > Date.now()) {
+      if (
+        current.expiresAt > Date.now() &&
+        (current.accessToken !== observed.accessToken || current.expiresAt > observed.expiresAt)
+      ) {
         return current;
       }
       const abort = new AbortController();

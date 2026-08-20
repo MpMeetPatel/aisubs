@@ -138,6 +138,36 @@ use the same base URL, local AISubs key, and model ID. Exact settings labels can
 change between client releases, so the account dashboard remains the source of
 truth for the three values.
 
+### Codex Desktop
+
+AISubs can make callable models from connected non-ChatGPT accounts available in
+Codex Desktop through one local Responses endpoint. Keep AISubs running, connect
+the accounts you want to use, then:
+
+1. Open **Configure Codex** on the AISubs dashboard.
+2. Choose **Use AISubs models in Codex**.
+3. Fully restart Codex Desktop.
+4. Select a model named `provider/model`, such as `copilot/MODEL_ID`.
+
+Configuration writes `~/.codex/aisubs-catalog.json` and updates the root settings,
+AISubs provider, and `AISUBS_API_KEY` entry in `~/.codex/config.toml`. Both files
+are created with user-private permissions when they do not already exist. The key
+is stored in that Codex config so Codex can authenticate to the localhost AISubs
+server; do not share the file.
+
+The generated catalog intentionally excludes ChatGPT models so Codex continues to
+treat official OpenAI models as native when official mode is active. Choose
+**Restore official Codex models** in the same dialog, then restart Codex Desktop,
+to remove the AISubs provider and catalog selection. AISubs saves the pre-restore
+config as `~/.codex/config.toml.aisubs-backup` if that backup does not already
+exist.
+
+If multiple connected accounts expose the same `provider/model`, the router uses
+the first connected account that reports it. Regenerating the AISubs API key
+invalidates the old Codex configuration; run **Configure Codex** again and restart
+Codex Desktop. Configuration refuses to overwrite the catalog when no callable
+non-ChatGPT model can be discovered.
+
 ### Compatibility contract
 
 Use Chat Completions when an app offers only an “OpenAI-compatible” provider.
@@ -628,6 +658,10 @@ GET    /v1/usage/:provider?account=work
 GET    /v1/models/:provider?account=work
 GET    /v1/api-key                 # dashboard session only
 POST   /v1/api-key/regenerate      # dashboard session only
+POST   /v1/codex/configure         # dashboard session only
+POST   /v1/codex/restore-official  # dashboard session only
+GET    /aisubs-codex/v1/models
+POST   /aisubs-codex/v1/responses
 *      /aisubs/:provider/:account/v1/*
 ```
 
@@ -642,6 +676,8 @@ the old key.
 
 - Credentials: `~/.aisubs/credentials.json`.
 - Persistent local API key: `~/.aisubs/api-key`.
+- Optional Codex catalog: `~/.codex/aisubs-catalog.json`.
+- Codex integration stores the local AISubs key in the user-private Codex config.
 - State directories and files use private permissions where the platform supports them.
 - Provider credentials are attached only after provider-host allowlist validation.
 - Local authorization, cookie, origin, and proxy headers are never forwarded.

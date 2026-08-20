@@ -101,6 +101,7 @@ describe("provider-neutral compatibility", () => {
         expect.objectContaining({
           role: "user",
           content: expect.arrayContaining([
+            { type: "input_text", text: "What is this?" },
             { type: "input_image", image_url: "https://example.test/image.png" },
           ]),
         }),

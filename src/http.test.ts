@@ -250,6 +250,19 @@ describe("subscription auth HTTP server", () => {
           },
         },
       ],
+      models: [
+        {
+          id: "test-model",
+          object: "model",
+          owned_by: "test",
+          capabilities: {
+            endpoints: [],
+            input_modalities: ["text"],
+            reasoning_efforts: [],
+            tools: false,
+          },
+        },
+      ],
     });
     const model = await fetch(`${running.url}/aisubs/test/work/v1/models/test-model`, {
       headers,
@@ -271,6 +284,54 @@ describe("subscription auth HTTP server", () => {
     });
     expect(embeddings.status).toBe(204);
     expect(proxy).toHaveBeenCalledWith("test", "work", "embeddings", expect.any(Object));
+  });
+
+  test("deduplicates callable models in the Codex catalog", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [
+      {
+        ...provider,
+        async getModels() {
+          return [
+            { id: "messages-model", endpoints: ["v1/messages"] },
+            { id: "google-model", endpoints: ["models/google-model"] },
+            { id: "metadata-only" },
+          ];
+        },
+      },
+    ]);
+    await (await auth.account("test", "work").signIn()).wait();
+    await (await auth.account("test", "personal").signIn()).wait();
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+
+    const response = await fetch(`${running.url}/aisubs-codex/v1/models`, {
+      headers: { authorization: "Bearer secret" },
+    });
+    const body = (await response.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((model) => model.id)).toEqual([
+      "test/messages-model",
+      "test/google-model",
+    ]);
+  });
+
+  test("returns an OpenAI-style not-found error for an unknown Codex provider", async () => {
+    running = await createSubscriptionAuthServer({
+      auth: new SubscriptionAuth(new MemoryCredentialStore(), [provider]),
+      apiKey: "secret",
+    });
+
+    const response = await fetch(`${running.url}/aisubs-codex/v1/responses`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body: JSON.stringify({ model: "missing/model", input: "hello" }),
+    });
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        message: "Model not found: missing/model",
+        type: "invalid_request_error",
+        code: "model_not_found",
+      },
+    });
   });
 
   test("shares the account model cache across discovery and compatible requests", async () => {
@@ -392,36 +453,6 @@ describe("subscription auth HTTP server", () => {
     expect(upstream).not.toHaveProperty("top_p");
   });
 
-  test("accepts text content parts from OpenAI-compatible clients", async () => {
-    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
-    const proxy = vi
-      .spyOn(auth, "proxy")
-      .mockResolvedValue(
-        new Response(
-          [
-            'data: {"type":"response.output_text.delta","delta":"Hello"}',
-            'data: {"type":"response.completed","response":{"id":"resp_1"}}',
-            "",
-          ].join("\n\n"),
-        ),
-      );
-    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
-
-    const response = await fetch(`${running.url}/aisubs/chatgpt/work/v1/chat/completions`, {
-      method: "POST",
-      headers: { authorization: "Bearer secret", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-test",
-        messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
-      }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(JSON.parse(String(proxy.mock.calls[0]?.[3]?.body))).toMatchObject({
-      input: [{ role: "user", content: [{ type: "input_text", text: "Hello" }] }],
-    });
-  });
-
   test("streams Chat Completions chunks for streaming clients", async () => {
     const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     vi.spyOn(auth, "proxy").mockResolvedValue(
@@ -485,7 +516,7 @@ describe("subscription auth HTTP server", () => {
       "chatgpt",
       "work",
       "responses",
-      expect.objectContaining({ body: Buffer.from(body) }),
+      expect.objectContaining({ body: new TextEncoder().encode(body) }),
     );
   });
 

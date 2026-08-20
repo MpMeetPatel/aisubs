@@ -19,9 +19,22 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers },
   });
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status})`);
-  return body;
+  const body: unknown = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const failure = body && typeof body === "object" && "error" in body ? body.error : undefined;
+    const fallback =
+      body && typeof body === "object" && "message" in body ? body.message : undefined;
+    const message =
+      typeof failure === "string"
+        ? failure
+        : failure && typeof failure === "object" && "message" in failure
+          ? String(failure.message ?? "")
+          : typeof fallback === "string"
+            ? fallback
+            : "";
+    throw new Error(message || `Request failed (${response.status})`);
+  }
+  return body as T;
 }
 
 export function formatDate(value?: number): string {

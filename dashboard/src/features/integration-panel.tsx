@@ -35,13 +35,13 @@ export function modelApi(provider: Provider, model?: ProviderModel): ModelApi {
   return endpoints.has("responses") && !endpoints.has("chat/completions") ? "responses" : "chat";
 }
 
-function providerFactoryName(provider: Provider): string {
+function providerFactoryName(provider: Provider): string | undefined {
   if (provider.id === "chatgpt") return "chatGptProvider";
   if (provider.id === "claude") return "claudeProvider";
   if (provider.id === "copilot") return "copilotProvider";
+  if (provider.id === "grok") return "grokProvider";
   if (provider.id === "opencode-go") return "openCodeGoProvider";
   if (provider.id === "opencode-zen") return "openCodeZenProvider";
-  return "grokProvider";
 }
 
 function snippets(
@@ -54,6 +54,8 @@ function snippets(
   const anthropicSdkBase = base.slice(0, -3);
   const env = "AISUBS_API_KEY";
   const providerFactory = providerFactoryName(provider);
+  const providerLiteral = JSON.stringify(provider.id);
+  const accountLiteral = JSON.stringify(account);
   const universal: Snippet[] = [
     {
       id: "app",
@@ -105,11 +107,13 @@ Vision: supported when the selected model supports it`,
   -H "Content-Type: application/json" \
   -d '{"model":"${model}","messages":[{"role":"user","content":"Hello from AISubs"}],"stream":true}'`,
     },
-    {
-      id: "aisubs",
-      label: "AISubs SDK",
-      install: "nub install aisubs",
-      code: `import {
+    ...(providerFactory
+      ? [
+          {
+            id: "aisubs",
+            label: "AISubs SDK",
+            install: "nub install aisubs",
+            code: `import {
   createSubscriptionAuth,
   ${providerFactory},
 } from "aisubs";
@@ -117,7 +121,7 @@ Vision: supported when the selected model supports it`,
 const subscriptions = createSubscriptionAuth({
   providers: [${providerFactory}()],
 });
-const account = subscriptions.account("${provider.id}", "${account}");
+const account = subscriptions.account(${providerLiteral}, ${accountLiteral});
 
 if (!(await account.status()).authenticated) {
   const login = await account.signIn();
@@ -127,8 +131,10 @@ if (!(await account.status()).authenticated) {
 
 const catalog = await account.getModels();
 console.log(catalog?.models);`,
-      note: "Direct, in-process SDK: use the model's reported native endpoint with account.proxy() or inject account.proxy() as an SDK fetch transport. No local HTTP server or AISubs API key is needed.",
-    },
+            note: "Direct, in-process SDK: use the model's reported native endpoint with account.proxy() or inject account.proxy() as an SDK fetch transport. No local HTTP server or AISubs API key is needed.",
+          },
+        ]
+      : []),
   ];
   const withUniversal = (native: Snippet[]) => [...universal, ...native];
   if (provider.id === "claude") {
@@ -298,18 +304,17 @@ export function IntegrationPanel({
   account: string;
   models: ProviderModel[];
 }) {
-  const [model, setModel] = useState(
-    models.find((item) => item.selectable !== false)?.id ?? models[0]?.id ?? "MODEL_ID",
-  );
+  const [model, setModel] = useState("MODEL_ID");
   // Free Copilot accounts can return only provider-managed routes, marked as
   // non-selectable. Keep the approved route usable instead of leaving the
   // native select with no options.
   const selectableModels = models.filter((item) => item.selectable !== false);
   const visibleModels = selectableModels.length ? selectableModels : models.slice(0, 1);
-  const selectedModel = models.find((item) => item.id === model);
+  const selectedModel = visibleModels.find((item) => item.id === model) ?? visibleModels[0];
+  const resolvedModel = selectedModel?.id ?? "MODEL_ID";
   const options = useMemo(
-    () => snippets(provider, account, model, selectedModel),
-    [provider, account, model, selectedModel],
+    () => snippets(provider, account, resolvedModel, selectedModel),
+    [provider, account, resolvedModel, selectedModel],
   );
   const [active, setActive] = useState(options[0]?.id ?? "");
   const [packageManager, setPackageManager] = useState<PackageManager>("nub");
@@ -338,7 +343,7 @@ export function IntegrationPanel({
             <span className="relative inline-flex min-w-0 flex-1 items-center sm:min-w-[190px]">
               <select
                 className="h-[34px] w-full appearance-none rounded-lg border border-zinc-300 bg-zinc-50 py-0 pr-8 pl-3 text-[11px] text-zinc-900 outline-none transition hover:bg-zinc-100 focus:border-zinc-500 focus:ring-3 focus:ring-zinc-300/50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-800 dark:focus:border-zinc-500 dark:focus:ring-zinc-700"
-                value={model}
+                value={resolvedModel}
                 onChange={(event) => setModel(event.target.value)}
               >
                 {visibleModels.map((item) => (
@@ -378,7 +383,7 @@ export function IntegrationPanel({
           <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-300">
             {direct
               ? "Safe identity, credential status, usage, and models"
-              : `${apiName(provider, selectedModel)}${model !== "MODEL_ID" ? ` · ${model}` : ""}`}
+              : `${apiName(provider, selectedModel)}${resolvedModel !== "MODEL_ID" ? ` · ${resolvedModel}` : ""}`}
           </p>
         </div>
       </div>

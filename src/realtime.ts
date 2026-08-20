@@ -126,6 +126,7 @@ export function registerRealtimeProxy(
           headers: clientHeaders(request),
         })
         .then((authorized) => {
+          if (socket.readyState !== WebSocket.OPEN) return;
           const target = new URL(authorized.url);
           target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
           const protocols = request.headers["sec-websocket-protocol"]
