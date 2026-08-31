@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2 - 2026-08-31
+
+- Normalize ChatGPT Responses requests by removing unsupported explicit
+  prompt-cache controls while preserving prompt-cache routing.
+- Apply provider request normalization before authorization for direct and
+  proxied requests.
+
 ## 0.3.1 - 2026-08-20
 
 - Add dashboard-managed Codex Desktop integration with callable model discovery,
