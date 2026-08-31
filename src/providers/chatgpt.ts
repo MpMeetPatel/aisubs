@@ -115,6 +115,37 @@ function normalizeModel(value: unknown): (ProviderModel & { priority: number }) 
   };
 }
 
+async function normalizeChatGptRequest(request: Request): Promise<Request> {
+  if (request.method !== "POST" || !new URL(request.url).pathname.endsWith("/responses")) {
+    return request;
+  }
+  const raw: unknown = await request
+    .clone()
+    .json()
+    .catch(() => null);
+  if (!isRecord(raw)) return request;
+  const body = { ...raw };
+  delete body.prompt_cache_options;
+  delete body.prompt_cache_retention;
+  const stripBreakpoints = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map((item) =>
+          isRecord(item)
+            ? Object.fromEntries(
+                Object.entries(item).filter(([key]) => key !== "prompt_cache_breakpoint"),
+              )
+            : item,
+        )
+      : value;
+  body.input = stripBreakpoints(body.input);
+  body.tools = stripBreakpoints(body.tools);
+  return new Request(request, {
+    method: request.method,
+    body: JSON.stringify(body),
+    headers: { ...Object.fromEntries(request.headers), "content-type": "application/json" },
+  });
+}
+
 export interface ChatGptProviderOptions {
   clientId?: string;
   compatibilityVersion?: string;
@@ -375,6 +406,7 @@ export function chatGptProvider(options: ChatGptProviderOptions = {}): ProviderA
       if (!isRecord(raw)) throw new Error("ChatGPT refresh returned invalid JSON");
       return credentialFromTokens(raw, credential);
     },
+    normalizeRequest: normalizeChatGptRequest,
     authorize(request, credential) {
       requireAllowedHost(request, ["chatgpt.com"]);
       const accountId = credential.account?.id;

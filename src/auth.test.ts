@@ -174,6 +174,37 @@ describe("SubscriptionAuth", () => {
     }
   });
 
+  test("normalizes each provider request before authorization", async () => {
+    const store = new MemoryCredentialStore();
+    await store.modify("test", () => ({
+      accessToken: "secret",
+      expiresAt: Date.now() + 60_000,
+    }));
+    const normalizeRequest = vi.fn(async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      delete body.unsupported;
+      return new Request(request, { method: "POST", body: JSON.stringify(body) });
+    });
+    const auth = new SubscriptionAuth(store, [adapter({ normalizeRequest })]);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (request: Request) =>
+      Response.json(await request.json()),
+    ) as typeof fetch;
+    try {
+      await expect(
+        (
+          await auth.fetch("test", "https://example.test/responses", {
+            method: "POST",
+            body: JSON.stringify({ model: "model-1", unsupported: true }),
+          })
+        ).json(),
+      ).resolves.toEqual({ model: "model-1" });
+      expect(normalizeRequest).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("maps a local account proxy path to its provider endpoint", async () => {
     const store = new MemoryCredentialStore();
     await store.modify("test", () => ({ accessToken: "secret", expiresAt: Date.now() + 60_000 }));

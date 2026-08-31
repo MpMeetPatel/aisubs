@@ -168,6 +168,7 @@ export interface ProviderAdapter {
   readonly proxyBaseUrl?: string | ((credential: OAuthCredential) => string | undefined);
   /** Optional local OpenAI-compatible bridge for providers without a pass-through API. */
   proxy?(request: Request, credential: OAuthCredential): Promise<Response>;
+  normalizeRequest?(request: Request): Request | Promise<Request>;
   normalizeResponse?(request: Request, response: Response): Response | Promise<Response>;
   startLogin(signal: AbortSignal, options?: Record<string, unknown>): Promise<ProviderLogin>;
   refresh(credential: OAuthCredential, signal: AbortSignal): Promise<OAuthCredential>;

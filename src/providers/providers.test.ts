@@ -231,6 +231,68 @@ describe("built-in subscription providers", () => {
     });
   });
 
+  test("ChatGPT keeps implicit cache routing and removes unsupported explicit controls", async () => {
+    const provider = chatGptProvider();
+    const normalized = await provider.normalizeRequest!(
+      new Request("https://chatgpt.com/backend-api/codex/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          prompt_cache_key: "conversation-1",
+          prompt_cache_options: { mode: "explicit", ttl: "30m" },
+          prompt_cache_retention: "24h",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Hello" }],
+              prompt_cache_breakpoint: { mode: "explicit" },
+            },
+          ],
+          tools: [
+            {
+              type: "function",
+              name: "search",
+              parameters: {
+                type: "object",
+                properties: { prompt_cache_breakpoint: { type: "string" } },
+              },
+              prompt_cache_breakpoint: { mode: "explicit" },
+            },
+          ],
+        }),
+      }),
+    );
+    const request = await provider.authorize(normalized, {
+      accessToken: "secret",
+      expiresAt: Date.now() + 60_000,
+      account: { id: "acct-1" },
+    });
+
+    await expect(request.json()).resolves.toEqual({
+      model: "gpt-5.6-luna",
+      prompt_cache_key: "conversation-1",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Hello" }],
+        },
+      ],
+      tools: [
+        {
+          type: "function",
+          name: "search",
+          parameters: {
+            type: "object",
+            properties: { prompt_cache_breakpoint: { type: "string" } },
+          },
+        },
+      ],
+    });
+  });
+
   test("ChatGPT exposes reset-credit expiry", async () => {
     const provider = chatGptProvider();
     const fetcher = vi.fn(async (input: string | URL | Request) => {

@@ -506,7 +506,8 @@ export class SubscriptionAuth {
     const original = createRequest(input, init);
     const accountKey = normalizeAccountKey(account);
     const send = async (credential: OAuthCredential) => {
-      const authorized = await adapter.authorize(original.clone(), credential);
+      const normalized = (await adapter.normalizeRequest?.(original.clone())) ?? original.clone();
+      const authorized = await adapter.authorize(normalized, credential);
       const headers = new Headers(authorized.headers);
       headers.set("cache-control", "no-store");
       const request = new Request(authorized, { cache: "no-store", headers });
@@ -573,7 +574,9 @@ export class SubscriptionAuth {
         : adapter.proxyBaseUrl;
     if (!baseUrl) throw new Error(`${provider} does not expose a direct API endpoint`);
     const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-    return adapter.authorize(createRequest(new URL(path, base), init), credential);
+    const request = createRequest(new URL(path, base), init);
+    const normalized = (await adapter.normalizeRequest?.(request.clone())) ?? request;
+    return adapter.authorize(normalized, credential);
   }
 
   async getUsage(
