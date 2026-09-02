@@ -279,9 +279,10 @@ export function AccountDetails({
               <div className="divide-y divide-zinc-200 px-4 dark:divide-zinc-800">
                 {(usage?.meters ?? []).map((meter) => {
                   const percent = meterPercent(meter);
+                  const remainingPercent = percent == null ? null : 100 - percent;
                   return (
                     <div
-                      className={`grid min-h-[54px] items-center gap-3 sm:gap-5 ${percent == null ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,1fr)_160px]"}`}
+                      className={`grid min-h-[54px] items-center gap-3 sm:gap-5 ${remainingPercent == null ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,1fr)_160px]"}`}
                       data-tone={meterTone(meter)}
                       key={meter.id}
                     >
@@ -302,18 +303,18 @@ export function AccountDetails({
                           {meterValue(meter)}
                         </strong>
                       </span>
-                      {percent != null ? (
+                      {remainingPercent != null ? (
                         <span
                           className="h-[3px] w-full overflow-hidden rounded-full bg-zinc-300 dark:bg-zinc-700"
                           role="progressbar"
-                          aria-label={`${meter.label}: ${Math.round(percent)}% used`}
+                          aria-label={`${meter.label}: ${Math.round(remainingPercent)}% remaining`}
                           aria-valuemin={0}
                           aria-valuemax={100}
-                          aria-valuenow={Math.round(percent)}
+                          aria-valuenow={Math.round(remainingPercent)}
                         >
                           <i
                             className={`block h-full rounded-full ${meterTone(meter) === "danger" ? "bg-red-600" : meterTone(meter) === "warning" ? "bg-amber-500" : "bg-zinc-900 dark:bg-zinc-100"}`}
-                            style={{ width: `${percent}%` }}
+                            style={{ width: `${remainingPercent}%` }}
                           />
                         </span>
                       ) : null}

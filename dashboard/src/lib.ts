@@ -54,7 +54,8 @@ export function formatNumber(value?: number): string {
 export function meterValue(meter: UsageMeter): string {
   if (meter.unlimited) return "Unlimited";
   if (meter.remaining != null) return `${formatNumber(meter.remaining)} remaining`;
-  if (meter.percentUsed != null) return `${Math.round(meter.percentUsed)}% used`;
+  if (meter.percentUsed != null)
+    return `${Math.max(0, Math.round(100 - meter.percentUsed))}% remaining`;
   if (meter.used != null && meter.limit != null)
     return `${formatNumber(meter.used)} of ${formatNumber(meter.limit)}`;
   if (meter.used != null) return `${formatNumber(meter.used)} used`;
