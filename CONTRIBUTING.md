@@ -29,6 +29,25 @@ error output. Only report problems you personally reproduced or verified.
 
 5. Be ready to explain the change in your own words.
 
+## Releases
+
+Keep the package version, changelog entry, Git tag, GitHub Release, and npm
+package on the same patch version.
+
+1. Update `package.json` and the matching top entry in `CHANGELOG.md`.
+2. Run `nub run check` and `nub pack --dry-run`.
+3. Commit the release metadata, create the matching annotated tag, and push both:
+
+   ```sh
+   git commit -m "chore(release): prepare vX.Y.Z"
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin main vX.Y.Z
+   ```
+
+4. Create and publish the GitHub Release for `vX.Y.Z`, using the matching
+   `CHANGELOG.md` section as its notes.
+5. Publish `aisubs@X.Y.Z` to npm and verify the registry version.
+
 ## AI-assisted work
 
 AI tools are allowed. A human must own, review, test, explain, and submit the
