@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 - 2026-09-02
+
+- Show remaining usage percentages in account meter values and progress bars,
+  clamping exhausted meters to 0% remaining.
+
 ## 0.3.2 - 2026-08-31
 
 - Normalize ChatGPT Responses requests by removing unsupported explicit
