@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4 - 2026-09-13
+
+- Refresh account model catalogs on demand and update ChatGPT compatibility so
+  newly available subscription models appear without stale cached listings.
+- Preserve prompt-cache routing and cache read/write usage when translating
+  between OpenAI, Anthropic, and Responses-compatible protocols.
+
 ## 0.3.3 - 2026-09-02
 
 - Show remaining usage percentages in account meter values and progress bars,
