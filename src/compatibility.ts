@@ -50,7 +50,14 @@ type CompletionResult = {
   toolCalls: ToolCall[];
   refusal?: string;
   finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "error";
-  usage?: { input: number; output: number; total: number; cached?: number; cacheWrite?: number; reasoning?: number };
+  usage?: {
+    input: number;
+    output: number;
+    total: number;
+    cached?: number;
+    cacheWrite?: number;
+    reasoning?: number;
+  };
 };
 
 export class CompatibilityError extends Error {
@@ -887,9 +894,11 @@ function parseAnthropicResult(raw: Record<string, unknown>, model: string): Comp
             ? "content_filter"
             : "stop",
     usage: usage(
-      rawUsage?.input_tokens != null ? (numberValue(rawUsage.input_tokens) ?? 0) +
-        (numberValue(rawUsage.cache_read_input_tokens) ?? 0) +
-        (numberValue(rawUsage.cache_creation_input_tokens) ?? 0) : undefined,
+      rawUsage?.input_tokens != null
+        ? (numberValue(rawUsage.input_tokens) ?? 0) +
+            (numberValue(rawUsage.cache_read_input_tokens) ?? 0) +
+            (numberValue(rawUsage.cache_creation_input_tokens) ?? 0)
+        : undefined,
       numberValue(rawUsage?.output_tokens),
       numberValue(rawUsage?.cache_read_input_tokens),
       undefined,
@@ -973,10 +982,14 @@ function resultToChat(result: CompletionResult) {
             completion_tokens: result.usage.output,
             total_tokens: result.usage.total,
             ...(result.usage.cached != null || result.usage.cacheWrite != null
-              ? { prompt_tokens_details: {
-                ...(result.usage.cached != null ? { cached_tokens: result.usage.cached } : {}),
-                ...(result.usage.cacheWrite != null ? { cache_write_tokens: result.usage.cacheWrite } : {}),
-              } }
+              ? {
+                  prompt_tokens_details: {
+                    ...(result.usage.cached != null ? { cached_tokens: result.usage.cached } : {}),
+                    ...(result.usage.cacheWrite != null
+                      ? { cache_write_tokens: result.usage.cacheWrite }
+                      : {}),
+                  },
+                }
               : {}),
             ...(result.usage.reasoning != null
               ? { completion_tokens_details: { reasoning_tokens: result.usage.reasoning } }
@@ -1038,12 +1051,16 @@ function resultToResponses(result: CompletionResult) {
             input_tokens: result.usage.input,
             output_tokens: result.usage.output,
             total_tokens: result.usage.total,
-            ...(result.usage.cached != null || result.usage.cacheWrite != null ? {
-              input_tokens_details: {
-                ...(result.usage.cached != null ? { cached_tokens: result.usage.cached } : {}),
-                ...(result.usage.cacheWrite != null ? { cache_write_tokens: result.usage.cacheWrite } : {}),
-              },
-            } : {}),
+            ...(result.usage.cached != null || result.usage.cacheWrite != null
+              ? {
+                  input_tokens_details: {
+                    ...(result.usage.cached != null ? { cached_tokens: result.usage.cached } : {}),
+                    ...(result.usage.cacheWrite != null
+                      ? { cache_write_tokens: result.usage.cacheWrite }
+                      : {}),
+                  },
+                }
+              : {}),
             output_tokens_details: { reasoning_tokens: result.usage.reasoning ?? 0 },
           },
         }
@@ -1077,7 +1094,10 @@ function resultToAnthropic(result: CompletionResult) {
     ...(result.usage
       ? {
           usage: {
-            input_tokens: Math.max(0, result.usage.input - (result.usage.cached ?? 0) - (result.usage.cacheWrite ?? 0)),
+            input_tokens: Math.max(
+              0,
+              result.usage.input - (result.usage.cached ?? 0) - (result.usage.cacheWrite ?? 0),
+            ),
             output_tokens: result.usage.output,
             ...(result.usage.cached != null
               ? { cache_read_input_tokens: result.usage.cached }

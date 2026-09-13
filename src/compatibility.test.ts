@@ -22,23 +22,48 @@ function sentBody(value: SubscriptionAuth): Record<string, unknown> {
 describe("provider-neutral compatibility", () => {
   test("preserves cache accounting when translating Anthropic usage to OpenAI", async () => {
     const value = auth([{ id: "claude-test", endpoints: ["messages"] }], {
-      id: "msg_cache", model: "claude-test", content: [{ type: "text", text: "OK" }], stop_reason: "end_turn",
-      usage: { input_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 20, output_tokens: 5 },
+      id: "msg_cache",
+      model: "claude-test",
+      content: [{ type: "text", text: "OK" }],
+      stop_reason: "end_turn",
+      usage: {
+        input_tokens: 30,
+        cache_read_input_tokens: 50,
+        cache_creation_input_tokens: 20,
+        output_tokens: 5,
+      },
     });
-    const response = await proxyCompatible(value, "claude", "default", "chat/completions", request({ model: "claude-test", messages: [{ role: "user", content: "hello" }] }));
-    expect(await response.json()).toMatchObject({ usage: {
-      prompt_tokens: 100, completion_tokens: 5, total_tokens: 105,
-      prompt_tokens_details: { cached_tokens: 50, cache_write_tokens: 20 },
-    } });
+    const response = await proxyCompatible(
+      value,
+      "claude",
+      "default",
+      "chat/completions",
+      request({ model: "claude-test", messages: [{ role: "user", content: "hello" }] }),
+    );
+    expect(await response.json()).toMatchObject({
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 5,
+        total_tokens: 105,
+        prompt_tokens_details: { cached_tokens: 50, cache_write_tokens: 20 },
+      },
+    });
   });
 
   test("does not manufacture cache misses during Responses conversion and preserves routing", async () => {
     const value = auth([{ id: "model", endpoints: ["chat/completions"] }], {
-      id: "chat_test", choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+      id: "chat_test",
+      choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105 },
     });
-    const response = await proxyCompatible(value, "copilot", "default", "responses", request({ model: "model", input: "hello", prompt_cache_key: "stable-chat" }));
-    const result = await response.json() as { usage: Record<string, unknown> };
+    const response = await proxyCompatible(
+      value,
+      "copilot",
+      "default",
+      "responses",
+      request({ model: "model", input: "hello", prompt_cache_key: "stable-chat" }),
+    );
+    const result = (await response.json()) as { usage: Record<string, unknown> };
     expect(result.usage.input_tokens_details).toBeUndefined();
     expect(sentBody(value).prompt_cache_key).toBe("stable-chat");
   });
@@ -46,14 +71,41 @@ describe("provider-neutral compatibility", () => {
   test("subtracts cache reads and writes from Anthropic base input in JSON and SSE", async () => {
     for (const stream of [false, true]) {
       const value = auth([{ id: "model", endpoints: ["chat/completions"] }], {
-        id: "chat_test", choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105,
-          prompt_tokens_details: { cached_tokens: 50, cache_write_tokens: 20 } },
+        id: "chat_test",
+        choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 5,
+          total_tokens: 105,
+          prompt_tokens_details: { cached_tokens: 50, cache_write_tokens: 20 },
+        },
       });
-      const response = await proxyCompatible(value, "copilot", "default", "messages", request({ model: "model", stream, max_tokens: 10, messages: [{ role: "user", content: "hello" }] }));
+      const response = await proxyCompatible(
+        value,
+        "copilot",
+        "default",
+        "messages",
+        request({
+          model: "model",
+          stream,
+          max_tokens: 10,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      );
       const body = await response.text();
-      const result = stream ? JSON.parse(body.split("\n").find((line) => line.startsWith("data: "))!.slice(6)).message : JSON.parse(body);
-      expect(result.usage).toMatchObject({ input_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 20 });
+      const result = stream
+        ? JSON.parse(
+            body
+              .split("\n")
+              .find((line) => line.startsWith("data: "))!
+              .slice(6),
+          ).message
+        : JSON.parse(body);
+      expect(result.usage).toMatchObject({
+        input_tokens: 30,
+        cache_read_input_tokens: 50,
+        cache_creation_input_tokens: 20,
+      });
     }
   });
 
