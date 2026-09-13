@@ -116,7 +116,7 @@ export interface SubscriptionAccount {
   fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
   proxy(path: string, init?: RequestInit): Promise<Response>;
   getUsage(signal?: AbortSignal): Promise<ProviderUsage | null>;
-  getModels(signal?: AbortSignal): Promise<ProviderModels | null>;
+  getModels(signal?: AbortSignal, force?: boolean): Promise<ProviderModels | null>;
   credentialSummary(): Promise<CredentialSummary>;
   details(signal?: AbortSignal): Promise<SubscriptionAccountDetails>;
 }
@@ -612,11 +612,17 @@ export class SubscriptionAuth {
     provider: ProviderId,
     account = DEFAULT_ACCOUNT,
     callerSignal?: AbortSignal,
+    force = false,
   ): Promise<ProviderModels | null> {
     const adapter = this.adapter(provider);
     if (!adapter.getModels) return null;
     const accountKey = normalizeAccountKey(account);
     const scope = credentialKey(provider, accountKey);
+    if (force) {
+      this.modelsCache.delete(scope);
+      this.modelsInflight.delete(scope);
+      this.metadataGenerations.set(scope, (this.metadataGenerations.get(scope) ?? 0) + 1);
+    }
     return this.cachedMetadata(
       this.modelsCache,
       this.modelsInflight,
@@ -650,7 +656,7 @@ export class SubscriptionAuth {
       fetch: (input, init) => this.fetch(provider, input, init, accountKey),
       proxy: (path, init) => this.proxy(provider, accountKey, path, init),
       getUsage: (signal) => this.getUsage(provider, accountKey, signal),
-      getModels: (signal) => this.getModels(provider, accountKey, signal),
+      getModels: (signal, force) => this.getModels(provider, accountKey, signal, force),
       credentialSummary: () => this.credentialSummary(provider, accountKey),
       details: (signal) => this.details(provider, accountKey, signal),
     };

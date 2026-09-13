@@ -94,10 +94,13 @@ describe("SubscriptionAuth", () => {
     expect(getUsage).toHaveBeenCalledTimes(1);
     expect(getModels).toHaveBeenCalledTimes(1);
 
+    await auth.getModels("test", "default", undefined, true);
+    expect(getModels).toHaveBeenCalledTimes(2);
+
     await auth.signOut("test");
     await (await auth.signIn("test")).wait();
     await auth.getModels("test");
-    expect(getModels).toHaveBeenCalledTimes(2);
+    expect(getModels).toHaveBeenCalledTimes(3);
   });
 
   test("loads all safe account details through the account API", async () => {

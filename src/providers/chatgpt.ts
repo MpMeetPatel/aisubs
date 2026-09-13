@@ -154,7 +154,7 @@ export interface ChatGptProviderOptions {
 
 export function chatGptProvider(options: ChatGptProviderOptions = {}): ProviderAdapter {
   const clientId = options.clientId ?? DEFAULT_CLIENT_ID;
-  const compatibilityVersion = options.compatibilityVersion ?? "0.144.2";
+  const compatibilityVersion = options.compatibilityVersion ?? "0.154.0";
   const fetcher = options.fetch ?? globalThis.fetch;
 
   async function startDeviceLogin(signal: AbortSignal): Promise<ProviderLogin> {

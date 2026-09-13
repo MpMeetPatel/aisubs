@@ -176,8 +176,9 @@ describe("built-in subscription providers", () => {
     const models = await provider.getModels!({
       credential: { accessToken: "secret", expiresAt: Date.now() + 60_000 },
       signal: new AbortController().signal,
-      fetch: async () =>
-        Response.json({
+      fetch: async (input) => {
+        expect(new URL(String(input)).searchParams.get("client_version")).toBe("0.154.0");
+        return Response.json({
           models: [
             {
               slug: "gpt-test",
@@ -191,7 +192,8 @@ describe("built-in subscription providers", () => {
               supported_in_api: true,
             },
           ],
-        }),
+        });
+      },
     });
     expect(models).toEqual([
       {
