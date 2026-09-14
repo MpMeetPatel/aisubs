@@ -295,6 +295,35 @@ describe("built-in subscription providers", () => {
     });
   });
 
+  test("ChatGPT moves top-level instructions into the cacheable developer prefix", async () => {
+    const provider = chatGptProvider();
+    const normalized = await provider.normalizeRequest!(
+      new Request("https://chatgpt.com/backend-api/codex/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          instructions: "Stable system prompt",
+          input: [{ type: "message", role: "user", content: "Hello" }],
+          prompt_cache_key: "conversation-1",
+        }),
+      }),
+    );
+
+    await expect(normalized.json()).resolves.toEqual({
+      model: "gpt-5.6-luna",
+      prompt_cache_key: "conversation-1",
+      input: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Stable system prompt" }],
+        },
+        { type: "message", role: "user", content: "Hello" },
+      ],
+    });
+  });
+
   test("ChatGPT exposes reset-credit expiry", async () => {
     const provider = chatGptProvider();
     const fetcher = vi.fn(async (input: string | URL | Request) => {

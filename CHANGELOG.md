@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5 - 2026-09-14
+
+- Move ChatGPT Responses instructions into the developer input prefix so
+  stable subscription prompts participate in prompt caching.
+
 ## 0.3.4 - 2026-09-13
 
 - Refresh account model catalogs on demand and update ChatGPT compatibility so

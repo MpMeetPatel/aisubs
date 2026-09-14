@@ -125,6 +125,25 @@ async function normalizeChatGptRequest(request: Request): Promise<Request> {
     .catch(() => null);
   if (!isRecord(raw)) return request;
   const body = { ...raw };
+  // The Codex endpoint places the implicit cache boundary after input
+  // messages. Move stable top-level instructions into that prefix so they
+  // participate in prompt caching for subscription requests.
+  if (typeof body.instructions === "string" && body.instructions.length > 0) {
+    const input = Array.isArray(body.input)
+      ? body.input
+      : typeof body.input === "string"
+        ? [{ type: "message", role: "user", content: body.input }]
+        : [];
+    body.input = [
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: body.instructions }],
+      },
+      ...input,
+    ];
+    delete body.instructions;
+  }
   delete body.prompt_cache_options;
   delete body.prompt_cache_retention;
   const stripBreakpoints = (value: unknown): unknown =>
