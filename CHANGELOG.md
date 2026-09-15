@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6 - 2026-09-15
+
+- Preserve provider cache controls and cache usage across OpenAI-compatible,
+  Anthropic, Responses, and subscription transports.
+- Keep ChatGPT cache routing state scoped to account, session, and turn.
+- Normalize cache reads/writes and reasoning usage without losing native fields.
+
 ## 0.3.5 - 2026-09-14
 
 - Move ChatGPT Responses instructions into the developer input prefix so
