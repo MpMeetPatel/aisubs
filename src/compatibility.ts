@@ -8,22 +8,24 @@ type TextPart = { type: "text"; text: string };
 type ImagePart = { type: "image"; url: string; detail?: string };
 type AudioPart = { type: "audio"; data: string; format?: string };
 type FilePart = { type: "file"; fileId?: string; data?: string; filename?: string };
-type ContentPart = TextPart | ImagePart | AudioPart | FilePart;
+type CacheControl = { type: "ephemeral"; ttl?: "5m" | "1h" };
+type Cacheable = { cache_control?: CacheControl };
+type ContentPart = (TextPart | ImagePart | AudioPart | FilePart) & Cacheable;
 
-type ToolCall = { id: string; name: string; arguments: string };
+type ToolCall = { id: string; name: string; arguments: string } & Cacheable;
 type Message = {
   role: "system" | "developer" | "user" | "assistant" | "tool";
   content: ContentPart[];
   toolCallId?: string;
   toolCalls?: ToolCall[];
-};
+} & Cacheable;
 
 type FunctionTool = {
   name: string;
   description?: string;
   parameters?: unknown;
   strict?: boolean;
-};
+} & Cacheable;
 
 type CompletionRequest = {
   model: string;
@@ -40,6 +42,7 @@ type CompletionRequest = {
   metadata?: unknown;
   user?: string;
   promptCacheKey?: string;
+  cacheControl?: CacheControl;
 };
 
 type CompletionResult = {
@@ -90,11 +93,22 @@ function requiredModel(raw: Record<string, unknown>): string {
   return model;
 }
 
-function text(value: unknown): TextPart | null {
+function cacheControl(value: unknown): Cacheable {
+  if (!isRecord(value) || value.cache_control == null) return {};
+  const control = record(value.cache_control, "cache_control must be an object");
+  if (
+    control.type !== "ephemeral" ||
+    (control.ttl != null && control.ttl !== "5m" && control.ttl !== "1h")
+  )
+    throw new CompatibilityError("Unsupported cache_control type or TTL", "unsupported_feature");
+  return { cache_control: { type: "ephemeral", ...(control.ttl ? { ttl: control.ttl } : {}) } };
+}
+
+function text(value: unknown): (TextPart & Cacheable) | null {
   if (typeof value === "string") return { type: "text", text: value };
   if (!isRecord(value)) return null;
   const content = stringValue(value.text);
-  return content == null ? null : { type: "text", text: content };
+  return content == null ? null : { type: "text", text: content, ...cacheControl(value) };
 }
 
 function imageUrl(value: unknown): string | undefined {
@@ -117,13 +131,13 @@ function openAiParts(value: unknown): ContentPart[] {
       const url =
         imageUrl(part.image_url) ?? stringValue(part.image_url) ?? stringValue(part.file_id);
       if (!url) throw new CompatibilityError("Image content requires image_url or file_id");
-      return { type: "image", url, detail: stringValue(part.detail) };
+      return { type: "image", url, detail: stringValue(part.detail), ...cacheControl(part) };
     }
     if (type === "input_audio") {
       const audio = record(part.input_audio, "input_audio requires audio data");
       const data = stringValue(audio.data);
       if (!data) throw new CompatibilityError("input_audio requires audio data");
-      return { type: "audio", data, format: stringValue(audio.format) };
+      return { type: "audio", data, format: stringValue(audio.format), ...cacheControl(part) };
     }
     if (type === "file" || type === "input_file") {
       return {
@@ -131,6 +145,7 @@ function openAiParts(value: unknown): ContentPart[] {
         fileId: stringValue(part.file_id),
         data: stringValue(part.file_data),
         filename: stringValue(part.filename),
+        ...cacheControl(part),
       };
     }
     if (type === "refusal") return { type: "text", text: stringValue(part.refusal) ?? "" };
@@ -172,6 +187,7 @@ function chatTools(value: unknown): FunctionTool[] | undefined {
       description: stringValue(fn.description),
       parameters: fn.parameters,
       strict: typeof fn.strict === "boolean" ? fn.strict : undefined,
+      ...cacheControl(tool),
     };
   });
 }
@@ -190,6 +206,7 @@ function parseChat(body: Buffer): CompletionRequest {
       content: openAiParts(message.content),
       toolCallId: stringValue(message.tool_call_id),
       toolCalls: chatToolCalls(message.tool_calls),
+      ...cacheControl(message),
     };
   });
   return {
@@ -207,6 +224,7 @@ function parseChat(body: Buffer): CompletionRequest {
     metadata: raw.metadata,
     user: stringValue(raw.user),
     promptCacheKey: stringValue(raw.prompt_cache_key),
+    cacheControl: cacheControl(raw).cache_control,
   };
 }
 
@@ -316,21 +334,24 @@ function anthropicParts(value: unknown): { content: ContentPart[]; toolCalls?: T
   const toolCalls: ToolCall[] = [];
   for (const item of value) {
     const part = record(item, "Anthropic content blocks must be objects");
-    if (part.type === "text") content.push({ type: "text", text: stringValue(part.text) ?? "" });
+    if (part.type === "text")
+      content.push({ type: "text", text: stringValue(part.text) ?? "", ...cacheControl(part) });
     else if (part.type === "image") {
       const source = record(part.source, "Anthropic image requires source");
       if (source.type === "url")
-        content.push({ type: "image", url: stringValue(source.url) ?? "" });
+        content.push({ type: "image", url: stringValue(source.url) ?? "", ...cacheControl(part) });
       else
         content.push({
           type: "image",
           url: `data:${stringValue(source.media_type) ?? "image/png"};base64,${stringValue(source.data) ?? ""}`,
+          ...cacheControl(part),
         });
     } else if (part.type === "tool_use") {
       toolCalls.push({
         id: stringValue(part.id) ?? `call_${crypto.randomUUID()}`,
         name: stringValue(part.name) ?? "function",
         arguments: JSON.stringify(part.input ?? {}),
+        ...cacheControl(part),
       });
     } else if (part.type !== "thinking" && part.type !== "redacted_thinking") {
       throw new CompatibilityError(`Unsupported Anthropic content block: ${String(part.type)}`);
@@ -358,6 +379,7 @@ function parseAnthropic(body: Buffer): CompletionRequest {
             role: "tool",
             toolCallId: stringValue(part.tool_use_id),
             content: anthropicParts(part.content).content,
+            ...cacheControl(part),
           });
         } else normal.push(part);
       }
@@ -370,7 +392,12 @@ function parseAnthropic(body: Buffer): CompletionRequest {
         const tool = record(item, "Tools must be objects");
         const name = stringValue(tool.name);
         if (!name) throw new CompatibilityError("Tool requires a name");
-        return { name, description: stringValue(tool.description), parameters: tool.input_schema };
+        return {
+          name,
+          description: stringValue(tool.description),
+          parameters: tool.input_schema,
+          ...cacheControl(tool),
+        };
       })
     : undefined;
   return {
@@ -384,6 +411,7 @@ function parseAnthropic(body: Buffer): CompletionRequest {
     topP: numberValue(raw.top_p),
     stop: raw.stop_sequences,
     metadata: raw.metadata,
+    cacheControl: cacheControl(raw).cache_control,
   };
 }
 
@@ -471,14 +499,15 @@ function dataUri(url: string): { mediaType: string; data: string } | null {
 }
 
 function chatContent(parts: ContentPart[]): unknown {
-  if (parts.every((part) => part.type === "text"))
+  if (parts.every((part) => part.type === "text" && !part.cache_control))
     return parts.map((part) => (part.type === "text" ? part.text : "")).join("");
   return parts.map((part) => {
-    if (part.type === "text") return { type: "text", text: part.text };
+    if (part.type === "text") return { type: "text", text: part.text, ...cacheControl(part) };
     if (part.type === "image")
       return {
         type: "image_url",
         image_url: { url: part.url, ...(part.detail ? { detail: part.detail } : {}) },
+        ...cacheControl(part),
       };
     if (part.type === "audio")
       return {
@@ -498,6 +527,7 @@ function toChat(request: CompletionRequest): Record<string, unknown> {
   const messages = request.messages.map((message) => ({
     role: message.role,
     content: chatContent(message.content),
+    ...cacheControl(message),
     ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
     ...(message.toolCalls
       ? {
@@ -514,7 +544,13 @@ function toChat(request: CompletionRequest): Record<string, unknown> {
     messages,
     stream: false,
     ...(request.tools
-      ? { tools: request.tools.map((tool) => ({ type: "function", function: tool })) }
+      ? {
+          tools: request.tools.map(({ cache_control, ...tool }) => ({
+            type: "function",
+            function: tool,
+            ...(cache_control ? { cache_control } : {}),
+          })),
+        }
       : {}),
     ...(request.toolChoice != null ? { tool_choice: request.toolChoice } : {}),
     ...(request.maxTokens != null ? { max_completion_tokens: request.maxTokens } : {}),
@@ -604,7 +640,12 @@ function toResponses(request: CompletionRequest): Record<string, unknown> {
     stream: false,
     store: false,
     ...(request.tools
-      ? { tools: request.tools.map((tool) => ({ type: "function", ...tool })) }
+      ? {
+          tools: request.tools.map(({ cache_control: _cacheControl, ...tool }) => ({
+            type: "function",
+            ...tool,
+          })),
+        }
       : {}),
     ...(toolChoice != null ? { tool_choice: toolChoice } : {}),
     ...(request.maxTokens != null ? { max_output_tokens: request.maxTokens } : {}),
@@ -618,14 +659,18 @@ function toResponses(request: CompletionRequest): Record<string, unknown> {
   };
 }
 
-function anthropicContent(message: Message): unknown[] {
-  const parts: unknown[] = message.content.map((part) => {
-    if (part.type === "text") return { type: "text", text: part.text };
+function anthropicContent(message: Message): Record<string, unknown>[] {
+  const parts: Record<string, unknown>[] = message.content.map((part) => {
+    if (part.type === "text") return { type: "text", text: part.text, ...cacheControl(part) };
     if (part.type === "image") {
       const data = dataUri(part.url);
       return data
-        ? { type: "image", source: { type: "base64", media_type: data.mediaType, data: data.data } }
-        : { type: "image", source: { type: "url", url: part.url } };
+        ? {
+            type: "image",
+            source: { type: "base64", media_type: data.mediaType, data: data.data },
+            ...cacheControl(part),
+          }
+        : { type: "image", source: { type: "url", url: part.url }, ...cacheControl(part) };
     }
     if (part.type === "file")
       return {
@@ -634,6 +679,7 @@ function anthropicContent(message: Message): unknown[] {
           ? { type: "file", file_id: part.fileId }
           : { type: "base64", media_type: "application/octet-stream", data: part.data ?? "" },
         ...(part.filename ? { title: part.filename } : {}),
+        ...cacheControl(part),
       };
     throw new CompatibilityError(
       "Anthropic Messages does not support OpenAI input_audio",
@@ -646,7 +692,10 @@ function anthropicContent(message: Message): unknown[] {
       id: call.id,
       name: call.name,
       input: JSON.parse(call.arguments || "{}"),
+      ...cacheControl(call),
     });
+  if (message.role !== "tool" && message.cache_control && parts.length)
+    Object.assign(parts[parts.length - 1]!, cacheControl(message));
   return parts;
 }
 
@@ -665,6 +714,7 @@ function toAnthropic(request: CompletionRequest): Record<string, unknown> {
                 type: "tool_result",
                 tool_use_id: message.toolCallId,
                 content: anthropicContent(message),
+                ...cacheControl(message),
               },
             ],
           }
@@ -681,12 +731,14 @@ function toAnthropic(request: CompletionRequest): Record<string, unknown> {
     max_tokens: request.maxTokens ?? 4096,
     stream: false,
     ...(system.length ? { system } : {}),
+    ...(request.cacheControl ? { cache_control: request.cacheControl } : {}),
     ...(request.tools
       ? {
           tools: request.tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
             input_schema: tool.parameters ?? { type: "object", properties: {} },
+            ...cacheControl(tool),
           })),
         }
       : {}),
@@ -813,9 +865,12 @@ function parseChatResult(raw: Record<string, unknown>, model: string): Completio
     usage: usage(
       numberValue(details?.prompt_tokens),
       numberValue(details?.completion_tokens),
-      numberValue(promptDetails?.cached_tokens),
+      numberValue(details?.cached_tokens) ??
+        numberValue(details?.prompt_cache_hit_tokens) ??
+        numberValue(promptDetails?.cached_tokens),
       numberValue(completionDetails?.reasoning_tokens),
-      numberValue(promptDetails?.cache_write_tokens),
+      numberValue(promptDetails?.cache_write_tokens) ??
+        numberValue(promptDetails?.cache_creation_input_tokens),
     ),
   };
 }

@@ -125,25 +125,12 @@ async function normalizeChatGptRequest(request: Request): Promise<Request> {
     .catch(() => null);
   if (!isRecord(raw)) return request;
   const body = { ...raw };
-  // The Codex endpoint places the implicit cache boundary after input
-  // messages. Move stable top-level instructions into that prefix so they
-  // participate in prompt caching for subscription requests.
-  if (typeof body.instructions === "string" && body.instructions.length > 0) {
-    const input = Array.isArray(body.input)
-      ? body.input
-      : typeof body.input === "string"
-        ? [{ type: "message", role: "user", content: body.input }]
-        : [];
-    body.input = [
-      {
-        type: "message",
-        role: "developer",
-        content: [{ type: "input_text", text: body.instructions }],
-      },
-      ...input,
-    ];
-    delete body.instructions;
-  }
+  const headers = new Headers(request.headers);
+  const sessionId =
+    headers.get("session-id") ?? headers.get("session_id") ?? stringValue(body.prompt_cache_key);
+  if (sessionId) headers.set("session-id", sessionId);
+  // Preserve instruction placement and message boundaries. The native Codex
+  // client sends top-level instructions too; moving them does not enable caching.
   delete body.prompt_cache_options;
   delete body.prompt_cache_retention;
   const stripBreakpoints = (value: unknown): unknown =>
@@ -156,12 +143,23 @@ async function normalizeChatGptRequest(request: Request): Promise<Request> {
             : item,
         )
       : value;
-  body.input = stripBreakpoints(body.input);
+  const inputWithoutBreakpoints = stripBreakpoints(body.input);
+  body.input = Array.isArray(inputWithoutBreakpoints)
+    ? inputWithoutBreakpoints.map((item) =>
+        isRecord(item)
+          ? {
+              ...item,
+              ...(Array.isArray(item.content) ? { content: stripBreakpoints(item.content) } : {}),
+              ...(Array.isArray(item.output) ? { output: stripBreakpoints(item.output) } : {}),
+            }
+          : item,
+      )
+    : inputWithoutBreakpoints;
   body.tools = stripBreakpoints(body.tools);
   return new Request(request, {
     method: request.method,
     body: JSON.stringify(body),
-    headers: { ...Object.fromEntries(request.headers), "content-type": "application/json" },
+    headers: { ...Object.fromEntries(headers), "content-type": "application/json" },
   });
 }
 
@@ -175,6 +173,20 @@ export function chatGptProvider(options: ChatGptProviderOptions = {}): ProviderA
   const clientId = options.clientId ?? DEFAULT_CLIENT_ID;
   const compatibilityVersion = options.compatibilityVersion ?? "0.154.0";
   const fetcher = options.fetch ?? globalThis.fetch;
+  // Routing tokens belong to one account/session/turn, never to the whole provider.
+  const turnStates = new Map<string, { token: string; expiresAt: number }>();
+  const turnKey = (request: Request, accountId: string | undefined) => {
+    const sessionId = request.headers.get("session-id");
+    try {
+      const metadata: unknown = JSON.parse(request.headers.get("x-codex-turn-metadata") ?? "null");
+      const turnId = isRecord(metadata) ? stringValue(metadata.turn_id) : undefined;
+      return accountId && sessionId && turnId
+        ? JSON.stringify([accountId, sessionId, turnId])
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   async function startDeviceLogin(signal: AbortSignal): Promise<ProviderLogin> {
     const response = await fetcher(DEVICE_CODE_URL, {
@@ -430,11 +442,29 @@ export function chatGptProvider(options: ChatGptProviderOptions = {}): ProviderA
       requireAllowedHost(request, ["chatgpt.com"]);
       const accountId = credential.account?.id;
       if (!accountId) throw new Error("ChatGPT account id is missing");
+      const key = turnKey(request, accountId);
+      const state = key ? turnStates.get(key) : undefined;
       return bearerRequest(request, credential, {
         "chatgpt-account-id": accountId,
         originator: "aisubs",
         "user-agent": `aisubs/${compatibilityVersion}`,
+        ...(state && state.expiresAt > Date.now() && !request.headers.has("x-codex-turn-state")
+          ? { "x-codex-turn-state": state.token }
+          : {}),
       });
+    },
+    normalizeResponse(request, response) {
+      const key = turnKey(request, request.headers.get("chatgpt-account-id") ?? undefined);
+      const token = response.headers.get("x-codex-turn-state");
+      if (response.ok && key && token) {
+        for (const [entryKey, entry] of turnStates)
+          if (entry.expiresAt <= Date.now()) turnStates.delete(entryKey);
+        if (!turnStates.has(key)) {
+          if (turnStates.size >= 128) turnStates.delete(turnStates.keys().next().value!);
+          turnStates.set(key, { token, expiresAt: Date.now() + 30 * 60_000 });
+        }
+      }
+      return response;
     },
     async getUsage({ fetch, signal }) {
       const response = await fetch(USAGE_URL, { headers: { accept: "application/json" }, signal });

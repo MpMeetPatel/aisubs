@@ -248,8 +248,25 @@ describe("built-in subscription providers", () => {
             {
               type: "message",
               role: "user",
-              content: [{ type: "input_text", text: "Hello" }],
+              content: [
+                {
+                  type: "input_text",
+                  text: "Hello",
+                  prompt_cache_breakpoint: { mode: "explicit" },
+                },
+              ],
               prompt_cache_breakpoint: { mode: "explicit" },
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_1",
+              output: [
+                {
+                  type: "input_text",
+                  text: "result",
+                  prompt_cache_breakpoint: { mode: "explicit" },
+                },
+              ],
             },
           ],
           tools: [
@@ -272,6 +289,8 @@ describe("built-in subscription providers", () => {
       account: { id: "acct-1" },
     });
 
+    expect(request.headers.get("session-id")).toBe("conversation-1");
+
     await expect(request.json()).resolves.toEqual({
       model: "gpt-5.6-luna",
       prompt_cache_key: "conversation-1",
@@ -280,6 +299,11 @@ describe("built-in subscription providers", () => {
           type: "message",
           role: "user",
           content: [{ type: "input_text", text: "Hello" }],
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [{ type: "input_text", text: "result" }],
         },
       ],
       tools: [
@@ -295,7 +319,7 @@ describe("built-in subscription providers", () => {
     });
   });
 
-  test("ChatGPT moves top-level instructions into the cacheable developer prefix", async () => {
+  test("ChatGPT preserves top-level instructions and the exact input prefix", async () => {
     const provider = chatGptProvider();
     const normalized = await provider.normalizeRequest!(
       new Request("https://chatgpt.com/backend-api/codex/responses", {
@@ -312,16 +336,44 @@ describe("built-in subscription providers", () => {
 
     await expect(normalized.json()).resolves.toEqual({
       model: "gpt-5.6-luna",
+      instructions: "Stable system prompt",
       prompt_cache_key: "conversation-1",
-      input: [
-        {
-          type: "message",
-          role: "developer",
-          content: [{ type: "input_text", text: "Stable system prompt" }],
-        },
-        { type: "message", role: "user", content: "Hello" },
-      ],
+      input: [{ type: "message", role: "user", content: "Hello" }],
     });
+  });
+
+  test("replays ChatGPT routing state only within the same account, session, and turn", async () => {
+    const provider = chatGptProvider();
+    const make = async (accountId = "account-a", session = "session-a", turn = "turn-a") => {
+      const normalized = await provider.normalizeRequest!(
+        new Request("https://chatgpt.com/backend-api/codex/responses", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-codex-turn-metadata": JSON.stringify({ turn_id: turn }),
+          },
+          body: JSON.stringify({ input: [], prompt_cache_key: session }),
+        }),
+      );
+      return provider.authorize(normalized, {
+        accessToken: "secret",
+        expiresAt: Date.now() + 60000,
+        account: { id: accountId },
+      });
+    };
+    const first = await make();
+    expect(first.headers.get("x-codex-turn-state")).toBeNull();
+    await provider.normalizeResponse!(
+      first,
+      new Response("OK", { headers: { "x-codex-turn-state": "routing-token" } }),
+    );
+    expect((await make()).headers.get("x-codex-turn-state")).toBe("routing-token");
+    for (const args of [
+      ["account-b"],
+      ["account-a", "session-b"],
+      ["account-a", "session-a", "turn-b"],
+    ])
+      expect((await make(...args)).headers.get("x-codex-turn-state")).toBeNull();
   });
 
   test("ChatGPT exposes reset-credit expiry", async () => {

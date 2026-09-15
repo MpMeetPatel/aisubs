@@ -20,6 +20,107 @@ function sentBody(value: SubscriptionAuth): Record<string, unknown> {
 }
 
 describe("provider-neutral compatibility", () => {
+  test("preserves explicit cache boundaries and TTL through Chat to Anthropic translation", async () => {
+    const value = auth([{ id: "claude-test", endpoints: ["messages"] }], {
+      content: [{ type: "text", text: "OK" }],
+      usage: { input_tokens: 10, output_tokens: 1 },
+    });
+    const control = { type: "ephemeral", ttl: "1h" };
+    await proxyCompatible(
+      value,
+      "claude",
+      "default",
+      "chat/completions",
+      request({
+        model: "claude-test",
+        messages: [
+          {
+            role: "system",
+            content: [
+              { type: "text", text: "stable", cache_control: control },
+              { type: "text", text: "changing" },
+            ],
+          },
+          { role: "user", content: [{ type: "text", text: "hello", cache_control: control }] },
+          { role: "tool", tool_call_id: "call_1", content: "result", cache_control: control },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: { name: "lookup", parameters: { type: "object" } },
+            cache_control: control,
+          },
+        ],
+      }),
+      new Headers(),
+    );
+    expect(sentBody(value)).toMatchObject({
+      system: [
+        { type: "text", text: "stable", cache_control: control },
+        { type: "text", text: "changing" },
+      ],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hello", cache_control: control }] },
+        { role: "user", content: [{ type: "tool_result", cache_control: control }] },
+      ],
+      tools: [{ name: "lookup", cache_control: control }],
+    });
+    expect(JSON.stringify(sentBody(value)).match(/"cache_control"/g)).toHaveLength(4);
+  });
+
+  test("does not collapse marked text blocks when translating Anthropic to Chat", async () => {
+    const value = auth([{ id: "claude-test", endpoints: ["chat/completions"] }], {
+      choices: [{ message: { content: "OK" } }],
+      usage: { prompt_tokens: 10, completion_tokens: 1 },
+    });
+    const control = { type: "ephemeral" };
+    await proxyCompatible(
+      value,
+      "copilot",
+      "default",
+      "messages",
+      request({
+        model: "claude-test",
+        system: [
+          { type: "text", text: "stable", cache_control: control },
+          { type: "text", text: "changing" },
+        ],
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      new Headers(),
+    );
+    expect(sentBody(value)).toMatchObject({
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "stable", cache_control: control },
+            { type: "text", text: "changing" },
+          ],
+        },
+        { role: "user", content: "hello" },
+      ],
+    });
+  });
+
+  test("preserves DeepSeek and Moonshot cache usage through JSON and SSE translation", async () => {
+    for (const field of ["cached_tokens", "prompt_cache_hit_tokens"])
+      for (const stream of [false, true]) {
+        const value = auth([{ id: "model", endpoints: ["chat/completions"] }], {
+          choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1000, completion_tokens: 5, [field]: 700 },
+        });
+        const response = await proxyCompatible(
+          value,
+          "opencode-go",
+          "default",
+          "responses",
+          request({ model: "model", input: "hello", stream }),
+        );
+        const body = await response.text();
+        expect(body).toContain('"cached_tokens":700');
+      }
+  });
   test("preserves cache accounting when translating Anthropic usage to OpenAI", async () => {
     const value = auth([{ id: "claude-test", endpoints: ["messages"] }], {
       id: "msg_cache",
