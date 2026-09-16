@@ -3,6 +3,7 @@ import WebSocket, { type RawData } from "ws";
 import type { SubscriptionAuth } from "./auth.js";
 import type { ProviderId } from "./types.js";
 import { errorMessage } from "./utils.js";
+import { proxyRequestHeaders } from "./proxy-headers.js";
 
 type RealtimeAuth = (request: FastifyRequest) => boolean | Promise<boolean>;
 
@@ -39,28 +40,12 @@ function upstreamHeaders(request: Request): Record<string, string> {
 }
 
 function clientHeaders(request: FastifyRequest): Record<string, string> {
-  const local = new Set([
-    "authorization",
-    "connection",
-    "cookie",
-    "host",
-    "origin",
-    "proxy-authorization",
-    "sec-websocket-extensions",
-    "sec-websocket-key",
-    "sec-websocket-protocol",
-    "sec-websocket-version",
-    "upgrade",
-    "x-api-key",
-    "x-goog-api-key",
-  ]);
-  return Object.fromEntries(
+  const headers = Object.fromEntries(
     Object.entries(request.headers).flatMap(([name, value]) =>
-      value == null || local.has(name)
-        ? []
-        : [[name, Array.isArray(value) ? value.join(", ") : String(value)]],
+      value == null ? [] : [[name, Array.isArray(value) ? value.join(", ") : String(value)]],
     ),
   );
+  return Object.fromEntries(proxyRequestHeaders(headers));
 }
 
 /** Register a native Realtime WebSocket tunnel for providers that expose one. */
@@ -133,9 +118,10 @@ export function registerRealtimeProxy(
             ?.split(",")
             .map((value) => value.trim())
             .filter(Boolean);
+          const options = { headers: upstreamHeaders(authorized), handshakeTimeout: 30_000 };
           upstream = protocols?.length
-            ? new WebSocket(target, protocols, { headers: upstreamHeaders(authorized) })
-            : new WebSocket(target, { headers: upstreamHeaders(authorized) });
+            ? new WebSocket(target, protocols, options)
+            : new WebSocket(target, options);
           upstream.on("open", () => {
             for (const item of pending) upstream!.send(item.data, { binary: item.binary });
             pending.length = 0;

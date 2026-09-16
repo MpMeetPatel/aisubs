@@ -88,14 +88,14 @@ async function readEnvelope(file: string): Promise<Record<string, OAuthCredentia
   try {
     const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
     if (!isRecord(parsed)) throw new Error("Credential store must contain a JSON object");
-    const credentials: Record<string, OAuthCredential> = {};
+    const credentials: Record<string, OAuthCredential> = Object.create(null);
     for (const [key, value] of Object.entries(parsed)) {
       if (!isCredential(value)) throw new Error(`Credential store entry ${key} is invalid`);
       credentials[key] = value;
     }
     return credentials;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return Object.create(null);
     throw error;
   }
 }
@@ -201,11 +201,13 @@ export class MemoryCredentialStore implements CredentialStore {
       if (result) this.values.set(provider, result);
       else this.values.delete(provider);
     });
-    this.queues.set(
-      provider,
-      current.catch(() => {}),
-    );
-    await current;
+    const settled = current.catch(() => {});
+    this.queues.set(provider, settled);
+    try {
+      await current;
+    } finally {
+      if (this.queues.get(provider) === settled) this.queues.delete(provider);
+    }
     return result;
   }
 

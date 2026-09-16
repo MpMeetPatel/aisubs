@@ -54,6 +54,7 @@ export function App() {
       <AppHeader theme={theme} onTheme={setTheme} />
       {route ? (
         <AccountDetails
+          key={JSON.stringify([route.provider, route.account])}
           route={route}
           providers={providers}
           providersLoading={loading}

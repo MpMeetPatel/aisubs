@@ -37,6 +37,7 @@ import {
   secondaryButton,
   ErrorBanner,
   PlanBadge,
+  Modal,
 } from "../components/ui";
 import { IntegrationPanel } from "./integration-panel";
 import { ConnectDialog } from "./connect-dialog";
@@ -125,8 +126,10 @@ export function AccountDetails({
 
   useEffect(() => {
     void load();
+    return () => {
+      loadGeneration.current += 1;
+    };
   }, [load]);
-  useEffect(() => setQuery(""), [route.account, route.provider]);
   const identity = usage?.account ?? credential?.account;
   const filteredModels = (models?.models ?? []).filter((model) =>
     `${model.name ?? ""} ${model.id} ${model.description ?? ""}`
@@ -465,6 +468,7 @@ export function AccountDetails({
                     onChange={(event) => setQuery(event.target.value)}
                     className="h-[30px] min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] text-zinc-900 outline-none placeholder:text-zinc-500 dark:text-zinc-50 dark:placeholder:text-zinc-400"
                     placeholder="Find a model"
+                    aria-label="Find a model"
                   />
                 </label>
               ) : null}
@@ -528,16 +532,19 @@ export function AccountDetails({
       ) : null}
 
       {disconnect ? (
-        <div className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-zinc-950/35 p-4 backdrop-blur-sm sm:p-6">
-          <section
-            className="w-full max-w-[420px] rounded-xl border border-zinc-300 bg-white p-6 text-center shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
-            role="dialog"
-            aria-modal="true"
-          >
+        <Modal
+          labelledBy="disconnect-title"
+          onClose={() => {
+            if (!disconnecting) setDisconnect(false);
+          }}
+        >
+          <section className="w-full max-w-[420px] rounded-xl border border-zinc-300 bg-white p-6 text-center shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
             <span className="mx-auto mb-4 grid size-[54px] place-items-center rounded-xl bg-red-500/10 text-red-600 dark:text-red-400">
               <Trash2 size={22} />
             </span>
-            <h2 className="m-0 text-lg tracking-tight">Disconnect this account?</h2>
+            <h2 id="disconnect-title" className="m-0 text-lg tracking-tight">
+              Disconnect this account?
+            </h2>
             <p className="mx-auto mt-2 mb-[22px] max-w-[330px] text-xs text-zinc-600 dark:text-zinc-300">
               AISubs will remove its local credential. This does not cancel the provider
               subscription.
@@ -546,6 +553,7 @@ export function AccountDetails({
               <button
                 className={secondaryButton}
                 type="button"
+                disabled={disconnecting}
                 onClick={() => setDisconnect(false)}
               >
                 Keep account
@@ -574,7 +582,7 @@ export function AccountDetails({
               </button>
             </div>
           </section>
-        </div>
+        </Modal>
       ) : null}
       {reconnect ? (
         <ConnectDialog

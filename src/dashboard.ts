@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { spawn } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { access, readFile, writeFile } from "node:fs/promises";
 import type { Server, ServerResponse } from "node:http";
 import { homedir } from "node:os";
@@ -14,9 +14,12 @@ import {
   handleSubscriptionAuthApi,
   routeSegments,
   sendWebResponse,
+  bodyLimit,
+  requestApiKeys,
+  sameSecret,
 } from "./http.js";
 import { registerRealtimeProxy } from "./realtime.js";
-import { errorMessage, isRecord, stringValue, urlHost } from "./utils.js";
+import { errorMessage, isRecord, numberValue, stringValue, urlHost } from "./utils.js";
 
 const ASSET_DIRECTORY = join(dirname(fileURLToPath(import.meta.url)), "dashboard");
 const CONTENT_TYPES: Record<string, string> = {
@@ -26,26 +29,6 @@ const CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
 };
-
-function sameSecret(actual: string | undefined, expected: string): boolean {
-  if (!actual) return false;
-  const left = Buffer.from(actual);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-function requestApiKeys(request: FastifyRequest): string[] {
-  const authorization = request.headers.authorization;
-  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
-  const header = (name: "x-api-key" | "x-goog-api-key") => {
-    const value = request.headers[name];
-    return Array.isArray(value) ? value[0] : value;
-  };
-  const queryKey = new URL(request.url, "http://aisubs.local").searchParams.get("key") ?? undefined;
-  return [bearer, header("x-api-key"), header("x-goog-api-key"), queryKey].filter(
-    (value): value is string => value != null,
-  );
-}
 
 function cookie(request: FastifyRequest, name: string): string | undefined {
   for (const part of request.headers.cookie?.split(";") ?? []) {
@@ -176,7 +159,7 @@ export async function createSubscriptionAuthDashboardServer(
   let requestId = 0;
 
   const app = Fastify({
-    bodyLimit: options.maxProxyBodyBytes ?? 10 * 1024 * 1024,
+    bodyLimit: bodyLimit(options.maxProxyBodyBytes),
     forceCloseConnections: true,
   });
   app.removeAllContentTypeParsers();
@@ -201,7 +184,8 @@ export async function createSubscriptionAuthDashboardServer(
     registerRealtimeProxy(scope, options.auth, (request) => {
       return (
         requestApiKeys(request).some((value) => sameSecret(value, apiKey)) ||
-        sameSecret(cookie(request, "aisubs_session"), sessionToken)
+        (sameSecret(cookie(request, "aisubs_session"), sessionToken) &&
+          request.headers.origin === `http://${request.headers.host}`)
       );
     });
   });
@@ -228,7 +212,9 @@ export async function createSubscriptionAuthDashboardServer(
         requestLogs.push(entry);
         if (requestLogs.length > 200) requestLogs.shift();
         const event = `data: ${JSON.stringify(entry)}\n\n`;
-        for (const stream of logStreams) stream.write(event);
+        for (const stream of logStreams) {
+          if (!stream.write(event)) stream.destroy();
+        }
       });
     }
   });
@@ -278,7 +264,7 @@ export async function createSubscriptionAuthDashboardServer(
         reply.raw.flushHeaders();
         for (const entry of requestLogs) reply.raw.write(`data: ${JSON.stringify(entry)}\n\n`);
         logStreams.add(reply.raw);
-        request.raw.once("close", () => logStreams.delete(reply.raw));
+        reply.raw.once("close", () => logStreams.delete(reply.raw));
         return;
       }
       if (apiRoute && cookieAuthenticated && !bearerAuthenticated) {
@@ -364,7 +350,10 @@ export async function createSubscriptionAuthDashboardServer(
 
   app.setErrorHandler(async (error, request, reply) => {
     requestErrors.set(request, errorMessage(error));
-    await reply.code(400).send({ error: errorMessage(error) });
+    const status = isRecord(error) ? numberValue(error.statusCode) : undefined;
+    await reply
+      .code(status && status >= 400 && status <= 599 ? status : 400)
+      .send({ error: errorMessage(error) });
   });
 
   await app.listen({ port: options.port ?? 0, host });

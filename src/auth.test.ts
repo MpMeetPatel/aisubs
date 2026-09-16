@@ -39,6 +39,36 @@ function adapter(overrides: Partial<ProviderAdapter> = {}): ProviderAdapter {
 }
 
 describe("SubscriptionAuth", () => {
+  test("cancelling an old login cannot invalidate its replacement", async () => {
+    const completions: ReturnType<typeof Promise.withResolvers<OAuthCredential>>[] = [];
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [
+      adapter({
+        async startLogin() {
+          const completion = Promise.withResolvers<OAuthCredential>();
+          completions.push(completion);
+          return {
+            prompt: {
+              mode: "device",
+              verificationUri: "https://example.test",
+              userCode: "CODE",
+              expiresAt: 4e12,
+            },
+            complete: completion.promise,
+          };
+        },
+      }),
+    ]);
+    const first = await auth.signIn("test");
+    const second = await auth.signIn("test");
+    expect(first.state).toBe("cancelled");
+    first.cancel();
+    expect(auth.cancelLoginAttempt(first.id)).toBe(false);
+    completions[1]!.resolve({ accessToken: "replacement", expiresAt: 4e12 });
+    await expect(second.wait()).resolves.toMatchObject({ authenticated: true });
+    completions[0]!.resolve({ accessToken: "old", expiresAt: 4e12 });
+    await expect(first.wait()).rejects.toThrow("Login cancelled");
+    expect(await auth.getAccessToken("test")).toBe("replacement");
+  });
   test("uses the default file store when no store is provided", () => {
     const auth = createSubscriptionAuth({ providers: [adapter()] });
 

@@ -9,24 +9,25 @@ import { proxyCompatible } from "./compatibility.js";
 import { registerRealtimeProxy } from "./realtime.js";
 import type { ProviderId, ProviderModel } from "./types.js";
 import { errorMessage, isRecord, numberValue, stringValue, urlHost } from "./utils.js";
+import { proxyRequestHeaders } from "./proxy-headers.js";
 
 const MAX_PROXY_BODY_BYTES = 10 * 1024 * 1024;
 
-function bodyLimit(value = MAX_PROXY_BODY_BYTES): number {
+export function bodyLimit(value = MAX_PROXY_BODY_BYTES): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error("maxProxyBodyBytes must be a positive safe integer");
   }
   return value;
 }
 
-function sameSecret(actual: string | undefined, expected: string): boolean {
+export function sameSecret(actual: string | undefined, expected: string): boolean {
   if (!actual) return false;
   const left = Buffer.from(actual);
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function requestApiKeys(request: FastifyRequest): string[] {
+export function requestApiKeys(request: FastifyRequest): string[] {
   const authorization = request.headers.authorization;
   const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
   const header = (name: "x-api-key" | "x-goog-api-key") => {
@@ -58,28 +59,12 @@ function jsonBody(request: FastifyRequest): unknown {
 
 function requestHeaders(request: FastifyRequest): Headers {
   const headers = new Headers();
-  const privateHeaders = new Set([
-    "authorization",
-    "connection",
-    "content-length",
-    "cookie",
-    "host",
-    "origin",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "referer",
-    "te",
-    "trailer",
-    "upgrade",
-    "x-api-key",
-    "x-goog-api-key",
-  ]);
   for (const [name, value] of Object.entries(request.headers)) {
-    if (value != null && !privateHeaders.has(name)) {
+    if (value != null) {
       headers.set(name, Array.isArray(value) ? value.join(", ") : String(value));
     }
   }
-  return headers;
+  return proxyRequestHeaders(headers);
 }
 
 function responseHeaders(upstream: Response): Headers {
@@ -168,18 +153,12 @@ function codexResponsesBody(
       .filter(
         (item): item is Record<string, unknown> =>
           isRecord(item) &&
-          ["message", "function_call", "function_call_output"].includes(String(item.type)),
+          (item.type === undefined ||
+            ["message", "function_call", "function_call_output"].includes(String(item.type))),
       )
       .map((item) => {
-        if (item.type === "message") {
-          const content = Array.isArray(item.content)
-            ? item.content
-                .filter(isRecord)
-                .map((part) => stringValue(part.text))
-                .filter((value): value is string => Boolean(value))
-                .join("")
-            : item.content;
-          return { type: "message", role: stringValue(item.role) ?? "user", content };
+        if (item.type === "message" || item.type === undefined) {
+          return { type: "message", role: stringValue(item.role) ?? "user", content: item.content };
         }
         return item;
       });
@@ -468,10 +447,12 @@ export function clientAbortSignal(request: FastifyRequest, reply: FastifyReply):
   const controller = new AbortController();
   const abort = (): void => {
     if (!reply.raw.writableFinished && !controller.signal.aborted) controller.abort();
+    cleanup();
   };
   const cleanup = (): void => {
     request.raw.off("aborted", abort);
     reply.raw.off("close", abort);
+    reply.raw.off("finish", cleanup);
   };
   request.raw.once("aborted", abort);
   reply.raw.once("close", abort);

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
@@ -7,6 +7,23 @@ import { FileApiKeyStore, FileCredentialStore } from "./store.js";
 import type { ProviderAdapter } from "./types.js";
 
 describe("FileCredentialStore", () => {
+  test("stores arbitrary provider IDs without inheriting object properties", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aisubs-provider-keys-"));
+    try {
+      const store = new FileCredentialStore(join(directory, "credentials.json"));
+      const credential = { accessToken: "private", expiresAt: 4e12 };
+      for (const id of ["__proto__", "constructor", "toString"]) {
+        expect(await store.read(id)).toBeNull();
+        await store.modify(id, () => credential);
+        expect(await store.read(id)).toEqual(credential);
+      }
+      expect(await store.listKeys()).toEqual(["__proto__", "constructor", "toString"]);
+      await store.delete("__proto__");
+      expect(await store.read("__proto__")).toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   test("serializes refresh across package instances and protects the credential file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "subscription-auth-"));
     const file = join(directory, "credentials.json");

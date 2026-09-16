@@ -107,7 +107,7 @@ function cacheControl(value: unknown): Cacheable {
 function text(value: unknown): (TextPart & Cacheable) | null {
   if (typeof value === "string") return { type: "text", text: value };
   if (!isRecord(value)) return null;
-  const content = stringValue(value.text);
+  const content = typeof value.text === "string" ? value.text : undefined;
   return content == null ? null : { type: "text", text: content, ...cacheControl(value) };
 }
 
@@ -251,6 +251,12 @@ function responseTools(value: unknown): FunctionTool[] | undefined {
 
 function parseResponses(body: Buffer): CompletionRequest {
   const raw = json(body);
+  if (raw.previous_response_id != null || raw.background === true) {
+    throw new CompatibilityError(
+      "Stored or background Responses require native Responses support",
+      "unsupported_feature",
+    );
+  }
   const messages: Message[] = [];
   if (typeof raw.instructions === "string") {
     messages.push({ role: "developer", content: [{ type: "text", text: raw.instructions }] });
@@ -298,12 +304,17 @@ function parseResponses(body: Buffer): CompletionRequest {
           "item_reference requires native Responses support",
           "unsupported_feature",
         );
-      } else {
+      } else if (value.type == null || value.type === "message") {
         const role = stringValue(value.role) ?? "user";
         if (!["system", "developer", "user", "assistant"].includes(role)) {
           throw new CompatibilityError(`Unsupported Responses role: ${role}`);
         }
         messages.push({ role: role as Message["role"], content: openAiParts(value.content) });
+      } else {
+        throw new CompatibilityError(
+          `Unsupported Responses input item: ${String(value.type)}`,
+          "unsupported_feature",
+        );
       }
     }
   } else if (input != null)
@@ -315,7 +326,10 @@ function parseResponses(body: Buffer): CompletionRequest {
     stream: raw.stream === true,
     messages,
     tools: responseTools(raw.tools),
-    toolChoice: raw.tool_choice,
+    toolChoice:
+      isRecord(raw.tool_choice) && raw.tool_choice.type === "function"
+        ? { type: "function", function: { name: raw.tool_choice.name } }
+        : raw.tool_choice,
     maxTokens: numberValue(raw.max_output_tokens),
     temperature: numberValue(raw.temperature),
     topP: numberValue(raw.top_p),
@@ -405,7 +419,13 @@ function parseAnthropic(body: Buffer): CompletionRequest {
     stream: raw.stream === true,
     messages,
     tools,
-    toolChoice: raw.tool_choice,
+    toolChoice: isRecord(raw.tool_choice)
+      ? raw.tool_choice.type === "tool"
+        ? { type: "function", function: { name: raw.tool_choice.name } }
+        : raw.tool_choice.type === "any"
+          ? "required"
+          : raw.tool_choice.type
+      : raw.tool_choice,
     maxTokens: numberValue(raw.max_tokens),
     temperature: numberValue(raw.temperature),
     topP: numberValue(raw.top_p),
@@ -418,6 +438,7 @@ function parseAnthropic(body: Buffer): CompletionRequest {
 function parseGoogle(body: Buffer, model: string, stream = false): CompletionRequest {
   const raw = json(body);
   const messages: Message[] = [];
+  const pendingCalls: ToolCall[] = [];
   if (isRecord(raw.systemInstruction)) {
     const parts = Array.isArray(raw.systemInstruction.parts) ? raw.systemInstruction.parts : [];
     messages.push({
@@ -446,15 +467,23 @@ function parseGoogle(body: Buffer, model: string, stream = false): CompletionReq
       } else if (isRecord(part.fileData)) {
         content.push({ type: "image", url: stringValue(part.fileData.fileUri) ?? "" });
       } else if (isRecord(part.functionCall)) {
-        toolCalls.push({
-          id: `call_${crypto.randomUUID()}`,
+        const call = {
+          id: stringValue(part.functionCall.id) ?? `call_${crypto.randomUUID()}`,
           name: stringValue(part.functionCall.name) ?? "function",
           arguments: JSON.stringify(part.functionCall.args ?? {}),
-        });
+        };
+        toolCalls.push(call);
+        pendingCalls.push(call);
       } else if (isRecord(part.functionResponse)) {
+        const result = part.functionResponse;
+        const callIndex = pendingCalls.findIndex((call) =>
+          typeof result.id === "string" ? call.id === result.id : call.name === result.name,
+        );
+        const call = callIndex < 0 ? undefined : pendingCalls.splice(callIndex, 1)[0];
+        if (!call) throw new CompatibilityError("Function response has no matching function call");
         messages.push({
           role: "tool",
-          toolCallId: stringValue(part.functionResponse.name),
+          toolCallId: call.id,
           content: [{ type: "text", text: JSON.stringify(part.functionResponse.response ?? {}) }],
         });
       }
@@ -770,6 +799,11 @@ function googlePart(part: ContentPart): Record<string, unknown> {
 }
 
 function toGoogle(request: CompletionRequest): Record<string, unknown> {
+  const callNames = new Map(
+    request.messages.flatMap((message) =>
+      (message.toolCalls ?? []).map((call) => [call.id, call.name] as const),
+    ),
+  );
   const system = request.messages
     .filter((message) => message.role === "system" || message.role === "developer")
     .flatMap((message) => message.content.map(googlePart));
@@ -779,15 +813,18 @@ function toGoogle(request: CompletionRequest): Record<string, unknown> {
       const parts = message.role === "tool" ? [] : message.content.map(googlePart);
       for (const call of message.toolCalls ?? [])
         parts.push({ functionCall: { name: call.name, args: JSON.parse(call.arguments || "{}") } });
-      if (message.role === "tool")
+      if (message.role === "tool") {
+        const name = message.toolCallId ? callNames.get(message.toolCallId) : undefined;
+        if (!name) throw new CompatibilityError("Tool result has no matching function call");
         parts.push({
           functionResponse: {
-            name: message.toolCallId ?? "function",
+            name,
             response: {
               result: message.content.map((part) => (part.type === "text" ? part.text : part)),
             },
           },
         });
+      }
       return { role: message.role === "assistant" ? "model" : "user", parts };
     });
   const schema =
@@ -876,6 +913,10 @@ function parseChatResult(raw: Record<string, unknown>, model: string): Completio
 }
 
 function parseResponsesResult(raw: Record<string, unknown>, model: string): CompletionResult {
+  if (raw.status === "failed" || raw.error != null) {
+    const error = isRecord(raw.error) ? stringValue(raw.error.message) : undefined;
+    throw new CompatibilityError(error ?? "Provider response failed", "provider_error", 502);
+  }
   const content: ContentPart[] = [];
   const toolCalls: ToolCall[] = [];
   let refusal: string | undefined;
@@ -913,13 +954,7 @@ function parseResponsesResult(raw: Record<string, unknown>, model: string): Comp
     content,
     toolCalls,
     refusal,
-    finishReason: toolCalls.length
-      ? "tool_calls"
-      : raw.status === "incomplete"
-        ? "length"
-        : raw.status === "failed"
-          ? "error"
-          : "stop",
+    finishReason: raw.status === "incomplete" ? "length" : toolCalls.length ? "tool_calls" : "stop",
     usage: usage(
       numberValue(details?.input_tokens),
       numberValue(details?.output_tokens),
@@ -1255,17 +1290,13 @@ function responsesToChatStream(upstream: Response, model: string): Response {
   let hasToolCalls = false;
   const toolIndexes = new Map<number, number>();
   const emit = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
+    controller: TransformStreamDefaultController<Uint8Array>,
     delta: Record<string, unknown>,
     finishReason: string | null = null,
     rawUsage?: Record<string, unknown>,
   ): void => {
     const usage = rawUsage
-      ? {
-          prompt_tokens: rawUsage.input_tokens,
-          completion_tokens: rawUsage.output_tokens,
-          total_tokens: rawUsage.total_tokens,
-        }
+      ? resultToChat(parseResponsesResult({ usage: rawUsage }, model)).usage
       : undefined;
     controller.enqueue(
       encoder.encode(
@@ -1280,13 +1311,13 @@ function responsesToChatStream(upstream: Response, model: string): Response {
       ),
     );
   };
-  const start = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+  const start = (controller: TransformStreamDefaultController<Uint8Array>): void => {
     if (started) return;
     started = true;
     emit(controller, { role: "assistant", content: "" });
   };
   const finish = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
+    controller: TransformStreamDefaultController<Uint8Array>,
     completed?: Record<string, unknown>,
   ): void => {
     if (finished) return;
@@ -1297,126 +1328,113 @@ function responsesToChatStream(upstream: Response, model: string): Response {
     emit(
       controller,
       {},
-      hasToolCalls ? "tool_calls" : incomplete ? "length" : "stop",
+      incomplete ? "length" : hasToolCalls ? "tool_calls" : "stop",
       isRecord(response.usage) ? response.usage : undefined,
     );
     controller.enqueue(encoder.encode("data: [DONE]\n\n"));
   };
-  let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const reader = upstream.body!.getReader();
-      upstreamReader = reader;
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const handle = (raw: string): void => {
-        const data = raw
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
-        if (!data || data === "[DONE]") return;
-        const event: unknown = JSON.parse(data);
-        if (!isRecord(event)) return;
-        const completed = isRecord(event.response) ? event.response : undefined;
-        if (event.type === "response.created" && completed) response = completed;
-        if (event.type === "response.output_text.delta") {
-          start(controller);
-          emit(controller, { content: stringValue(event.delta) ?? "" });
-        }
-        if (event.type === "response.refusal.delta") {
-          start(controller);
-          emit(controller, { refusal: stringValue(event.delta) ?? "" });
-        }
-        const outputIndex = numberValue(event.output_index) ?? toolIndexes.size;
-        if (
-          event.type === "response.output_item.added" &&
-          isRecord(event.item) &&
-          event.item.type === "function_call"
-        ) {
-          start(controller);
-          hasToolCalls = true;
-          const index = toolIndexes.size;
-          toolIndexes.set(outputIndex, index);
-          emit(controller, {
-            tool_calls: [
-              {
-                index,
-                id:
-                  stringValue(event.item.call_id) ??
-                  stringValue(event.item.id) ??
-                  `call_${crypto.randomUUID()}`,
-                type: "function",
-                function: {
-                  name: stringValue(event.item.name) ?? "function",
-                  arguments: stringValue(event.item.arguments) ?? "",
-                },
-              },
-            ],
-          });
-        }
-        if (event.type === "response.function_call_arguments.delta") {
-          start(controller);
-          hasToolCalls = true;
-          emit(controller, {
-            tool_calls: [
-              {
-                index: toolIndexes.get(outputIndex) ?? 0,
-                function: { arguments: stringValue(event.delta) ?? "" },
-              },
-            ],
-          });
-        }
-        if (event.type === "response.completed" || event.type === "response.incomplete") {
-          finish(controller, completed);
-        }
-        if (event.type === "response.failed" || event.type === "error") {
-          const detail = isRecord(event.error)
-            ? stringValue(event.error.message)
-            : "Provider stream failed";
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
-                error: {
-                  message: detail ?? "Provider stream failed",
-                  type: "provider_error",
-                  code: "provider_error",
-                },
-              })}\n\n`,
-            ),
-          );
-          finished = true;
-        }
-      };
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          buffer += decoder.decode(value, { stream: !done });
-          for (
-            let end = buffer.search(/\r?\n\r?\n/);
-            end !== -1;
-            end = buffer.search(/\r?\n\r?\n/)
-          ) {
-            const raw = buffer.slice(0, end);
-            buffer = buffer.slice(end).replace(/^\r?\n\r?\n/, "");
-            handle(raw);
-          }
-          if (done) break;
-        }
-        if (buffer) handle(buffer);
-        finish(controller);
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      } finally {
-        reader.releaseLock();
-        upstreamReader = undefined;
-      }
-    },
-    cancel(reason) {
-      return upstreamReader?.cancel(reason);
-    },
-  });
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const body = upstream.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        buffer += decoder.decode(chunk, { stream: true });
+        consume(controller);
+      },
+      flush(controller) {
+        buffer += decoder.decode();
+        consume(controller);
+        if (buffer) handle(buffer, controller);
+        if (!finished) throw new Error("Provider stream ended before a terminal response event");
+      },
+    }),
+  );
+  const handle = (raw: string, controller: TransformStreamDefaultController<Uint8Array>): void => {
+    if (finished) return;
+    const data = raw
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n");
+    if (!data || data === "[DONE]") return;
+    const event: unknown = JSON.parse(data);
+    if (!isRecord(event)) return;
+    const completed = isRecord(event.response) ? event.response : undefined;
+    if (event.type === "response.created" && completed) response = completed;
+    if (event.type === "response.output_text.delta") {
+      start(controller);
+      emit(controller, { content: stringValue(event.delta) ?? "" });
+    }
+    if (event.type === "response.refusal.delta") {
+      start(controller);
+      emit(controller, { refusal: stringValue(event.delta) ?? "" });
+    }
+    const outputIndex = numberValue(event.output_index) ?? toolIndexes.size;
+    if (
+      event.type === "response.output_item.added" &&
+      isRecord(event.item) &&
+      event.item.type === "function_call"
+    ) {
+      start(controller);
+      hasToolCalls = true;
+      const index = toolIndexes.size;
+      toolIndexes.set(outputIndex, index);
+      emit(controller, {
+        tool_calls: [
+          {
+            index,
+            id:
+              stringValue(event.item.call_id) ??
+              stringValue(event.item.id) ??
+              `call_${crypto.randomUUID()}`,
+            type: "function",
+            function: {
+              name: stringValue(event.item.name) ?? "function",
+              arguments: stringValue(event.item.arguments) ?? "",
+            },
+          },
+        ],
+      });
+    }
+    if (event.type === "response.function_call_arguments.delta") {
+      start(controller);
+      hasToolCalls = true;
+      emit(controller, {
+        tool_calls: [
+          {
+            index: toolIndexes.get(outputIndex) ?? 0,
+            function: { arguments: stringValue(event.delta) ?? "" },
+          },
+        ],
+      });
+    }
+    if (event.type === "response.completed" || event.type === "response.incomplete") {
+      finish(controller, completed);
+    }
+    if (event.type === "response.failed" || event.type === "error") {
+      const failure = event.error ?? completed?.error;
+      const detail = isRecord(failure) ? stringValue(failure.message) : stringValue(event.message);
+      controller.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({
+            error: {
+              message: detail ?? "Provider stream failed",
+              type: "provider_error",
+              code: "provider_error",
+            },
+          })}\n\n`,
+        ),
+      );
+      finished = true;
+    }
+  };
+  function consume(controller: TransformStreamDefaultController<Uint8Array>): void {
+    for (let end = buffer.search(/\r?\n\r?\n/); end !== -1; end = buffer.search(/\r?\n\r?\n/)) {
+      const raw = buffer.slice(0, end);
+      buffer = buffer.slice(end).replace(/^\r?\n\r?\n/, "");
+      handle(raw, controller);
+    }
+  }
   return new Response(body, {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
@@ -1567,7 +1585,7 @@ async function upstreamResult(
   const body = await response.text();
   let raw: unknown;
   if (protocol === "responses" && /(^|\n)data:/.test(body)) {
-    let completed: Record<string, unknown> = {};
+    let completed: Record<string, unknown> | undefined;
     let outputText = "";
     const calls = new Map<number, ToolCall>();
     for (const frame of body.split(/\r?\n\r?\n/)) {
@@ -1599,11 +1617,29 @@ async function upstreamResult(
         const call = calls.get(index);
         if (call) call.arguments += stringValue(event.delta) ?? "";
       }
-      if (event.type === "response.completed" && isRecord(event.response))
-        completed = event.response;
-      if ((event.type === "response.failed" || event.type === "error") && isRecord(event.response))
-        completed = event.response;
+      if (
+        (event.type === "response.completed" || event.type === "response.incomplete") &&
+        isRecord(event.response)
+      )
+        completed = {
+          ...event.response,
+          status: event.type === "response.incomplete" ? "incomplete" : event.response.status,
+        };
+      if (event.type === "response.failed" || event.type === "error") {
+        const failure =
+          event.error ?? (isRecord(event.response) ? event.response.error : undefined);
+        const message = isRecord(failure)
+          ? stringValue(failure.message)
+          : stringValue(event.message);
+        throw new CompatibilityError(message ?? "Provider stream failed", "provider_error", 502);
+      }
     }
+    if (!completed)
+      throw new CompatibilityError(
+        "Provider stream ended before a terminal response event",
+        "provider_error",
+        502,
+      );
     const output = Array.isArray(completed.output) ? [...completed.output] : [];
     if (outputText && !output.some((item) => isRecord(item) && item.type === "message")) {
       output.push({

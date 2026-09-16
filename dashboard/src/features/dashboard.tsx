@@ -26,6 +26,7 @@ import {
   primaryButton,
   secondaryButton,
   iconButton,
+  Modal,
 } from "../components/ui";
 import { ConnectDialog } from "./connect-dialog";
 
@@ -98,17 +99,8 @@ function UseGuide({
   onClose(): void;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-zinc-950/35 p-0 backdrop-blur-sm sm:p-6"
-      role="presentation"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <section
-        className="max-h-[92dvh] w-full max-w-[700px] overflow-y-auto rounded-t-xl border border-zinc-300 bg-white shadow-2xl sm:max-h-[calc(100dvh-48px)] sm:rounded-xl dark:border-zinc-700 dark:bg-zinc-900"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="use-guide-title"
-      >
+    <Modal labelledBy="use-guide-title" onClose={onClose}>
+      <section className="max-h-[92dvh] w-full max-w-[700px] overflow-y-auto rounded-t-xl border border-zinc-300 bg-white shadow-2xl sm:max-h-[calc(100dvh-48px)] sm:rounded-xl dark:border-zinc-700 dark:bg-zinc-900">
         <header className="flex items-start justify-between gap-6 border-b border-zinc-200 p-5 dark:border-zinc-800">
           <div>
             <h2 className="m-0 text-lg tracking-tight" id="use-guide-title">
@@ -221,7 +213,7 @@ function UseGuide({
           </section>
         </div>
       </section>
-    </div>
+    </Modal>
   );
 }
 
@@ -274,17 +266,8 @@ function LogsDialog({ onClose }: { onClose(): void }) {
     };
   }, []);
   return (
-    <div
-      className="fixed inset-0 z-30 grid place-items-center bg-zinc-950/35 p-0 backdrop-blur-sm sm:p-6"
-      role="presentation"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <section
-        className="flex max-h-[92dvh] w-full max-w-[900px] flex-col overflow-hidden rounded-t-xl border border-zinc-700 bg-zinc-950 text-zinc-100 shadow-2xl sm:max-h-[calc(100dvh-48px)] sm:rounded-xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="logs-title"
-      >
+    <Modal labelledBy="logs-title" onClose={onClose}>
+      <section className="flex max-h-[92dvh] w-full max-w-[900px] flex-col overflow-hidden rounded-t-xl border border-zinc-700 bg-zinc-950 text-zinc-100 shadow-2xl sm:max-h-[calc(100dvh-48px)] sm:rounded-xl">
         <header className="flex items-start justify-between gap-6 border-b border-white/10 p-5">
           <div>
             <h2 className="m-0 text-lg tracking-tight" id="logs-title">
@@ -352,7 +335,7 @@ function LogsDialog({ onClose }: { onClose(): void }) {
           )}
         </div>
       </section>
-    </div>
+    </Modal>
   );
 }
 
@@ -596,17 +579,8 @@ export function Dashboard({
       ) : null}
       {showLogs ? <LogsDialog onClose={() => setShowLogs(false)} /> : null}
       {showCodexDialog ? (
-        <div
-          className="fixed inset-0 z-30 grid place-items-center bg-zinc-950/35 p-4 backdrop-blur-sm"
-          role="presentation"
-          onMouseDown={(event) => event.target === event.currentTarget && setShowCodexDialog(false)}
-        >
-          <section
-            className="w-full max-w-[560px] rounded-xl border border-zinc-300 bg-white p-5 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="codex-config-title"
-          >
+        <Modal labelledBy="codex-config-title" onClose={() => setShowCodexDialog(false)}>
+          <section className="w-full max-w-[560px] rounded-xl border border-zinc-300 bg-white p-5 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
             <header className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="m-0 text-lg tracking-tight" id="codex-config-title">
@@ -694,7 +668,7 @@ export function Dashboard({
               </div>
             )}
           </section>
-        </div>
+        </Modal>
       ) : null}
     </main>
   );

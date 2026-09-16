@@ -76,7 +76,7 @@ export function bearerRequest(
   }
   headers.set("authorization", `Bearer ${credential.accessToken}`);
   for (const [name, value] of Object.entries(extraHeaders ?? {})) headers.set(name, value);
-  return new Request(request, { headers });
+  return new Request(request, { headers, redirect: "error" });
 }
 
 export function urlHost(host: string): string {

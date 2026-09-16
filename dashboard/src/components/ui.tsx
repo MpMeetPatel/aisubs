@@ -1,5 +1,5 @@
 import { Check, ChevronRight, CircleAlert, Copy, Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, go, icon, planKind } from "../lib";
 import type { Provider, ProviderUsage, Session, Theme } from "../types";
 import { copy } from "./syntax";
@@ -15,6 +15,37 @@ export const iconButton =
 export const panel =
   "overflow-hidden rounded-[10px] border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900";
 export const page = "mx-auto min-h-dvh w-full max-w-[1180px] px-4 pt-24 pb-12 sm:px-6 sm:pb-16";
+
+export function Modal({
+  labelledBy,
+  onClose,
+  children,
+}: {
+  labelledBy: string;
+  onClose(): void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby={labelledBy}
+      className="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none overflow-y-auto border-0 bg-transparent p-0 text-inherit open:grid open:place-items-center backdrop:bg-zinc-950/35 backdrop:backdrop-blur-sm sm:p-6"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => event.target === event.currentTarget && onClose()}
+    >
+      {children}
+    </dialog>
+  );
+}
 
 function ThemeSwitch({ theme, onChange }: { theme: Theme; onChange(theme: Theme): void }) {
   const option =

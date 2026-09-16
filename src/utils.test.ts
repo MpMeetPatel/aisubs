@@ -22,6 +22,7 @@ test("replaces local credentials instead of forwarding them", () => {
     { accessToken: "provider", expiresAt: Date.now() + 60_000 },
   );
   expect(Object.fromEntries(request.headers)).toEqual({ authorization: "Bearer provider" });
+  expect(request.redirect).toBe("error");
 });
 
 test("brackets IPv6 URL hosts", () => {

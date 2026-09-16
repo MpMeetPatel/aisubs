@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { nextAccountKey } from "../../../src/account-key.js";
 import { api, icon } from "../lib";
 import type { LoginFlow, Provider, Session } from "../types";
-import { CopyButton, ErrorBanner, iconButton, primaryButton } from "../components/ui";
+import { CopyButton, ErrorBanner, Modal, iconButton, primaryButton } from "../components/ui";
 
 export function ConnectDialog({
   providers,
@@ -42,21 +42,34 @@ export function ConnectDialog({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (login?.state === "complete") {
+      onConnected();
+      return;
+    }
     if (!login || login.state !== "pending") return;
-    const timer = window.setInterval(async () => {
+    const abort = new AbortController();
+    let timer: number;
+    const poll = async () => {
       try {
-        const status = await api<Omit<LoginFlow, "prompt">>(`/v1/logins/${login.id}`);
+        const status = await api<Omit<LoginFlow, "prompt">>(`/v1/logins/${login.id}`, {
+          signal: abort.signal,
+        });
+        if (abort.signal.aborted) return;
+        setError(null);
         if (status.state !== "pending") {
-          window.clearInterval(timer);
           setLogin((current) => (current ? { ...current, ...status } : current));
-          if (status.state === "complete") window.setTimeout(onConnected, 500);
-        }
+        } else timer = window.setTimeout(poll, 1000);
       } catch (nextError) {
-        window.clearInterval(timer);
+        if (abort.signal.aborted) return;
         setError(nextError instanceof Error ? nextError.message : String(nextError));
+        timer = window.setTimeout(poll, 5000);
       }
-    }, 1000);
-    return () => window.clearInterval(timer);
+    };
+    timer = window.setTimeout(poll, 1000);
+    return () => {
+      abort.abort();
+      window.clearTimeout(timer);
+    };
   }, [login?.id, login?.state, onConnected]);
 
   const choose = (next: Provider) => {
@@ -78,16 +91,17 @@ export function ConnectDialog({
         method: "POST",
         body: JSON.stringify({
           account: account.trim(),
-          replace: replaceExisting,
+          replace:
+            replaceExisting && provider.id === initial?.id && account.trim() === initialAccount,
           mode,
           ...fields,
         }),
       });
       setLogin(next);
-      if (popup && next.prompt.authorizationUri) popup.location.href = next.prompt.authorizationUri;
+      const authorizationUri = next.prompt.mode === "browser" ? next.prompt.authorizationUri : null;
+      if (popup && authorizationUri) popup.location.href = authorizationUri;
       else popup?.close();
-      if (next.prompt.authorizationUri && !popup)
-        window.open(next.prompt.authorizationUri, "_blank", "noopener");
+      if (authorizationUri && !popup) window.open(authorizationUri, "_blank", "noopener");
     } catch (nextError) {
       popup?.close();
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -99,6 +113,7 @@ export function ConnectDialog({
   const normalizedAccount = account.trim();
   const duplicateAccount = Boolean(
     provider &&
+    !(replaceExisting && provider.id === initial?.id && normalizedAccount === initialAccount) &&
     sessions.some(
       (session) =>
         (session.authenticated || session.reauthRequired) &&
@@ -110,18 +125,25 @@ export function ConnectDialog({
     (field) => field.required && !fields[field.name]?.trim(),
   );
 
+  const close = async () => {
+    if (busy) return;
+    if (login?.state === "pending") {
+      setBusy(true);
+      try {
+        await api(`/v1/logins/${login.id}`, { method: "DELETE" });
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        return;
+      } finally {
+        setBusy(false);
+      }
+    }
+    onClose();
+  };
+
   return (
-    <div
-      className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-zinc-950/35 p-0 backdrop-blur-sm sm:p-6"
-      role="presentation"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <section
-        className="max-h-[92dvh] w-full max-w-[560px] overflow-y-auto rounded-t-xl border border-zinc-300 bg-white shadow-2xl sm:max-h-[calc(100dvh-48px)] sm:rounded-xl dark:border-zinc-700 dark:bg-zinc-900"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="connect-title"
-      >
+    <Modal labelledBy="connect-title" onClose={() => void close()}>
+      <section className="max-h-[92dvh] w-full max-w-[560px] overflow-y-auto rounded-t-xl border border-zinc-300 bg-white shadow-2xl sm:max-h-[calc(100dvh-48px)] sm:rounded-xl dark:border-zinc-700 dark:bg-zinc-900">
         <div className="flex items-start justify-between gap-6 border-b border-zinc-200 p-5 dark:border-zinc-800">
           <div>
             <h2 className="m-0 text-lg tracking-tight" id="connect-title">
@@ -133,7 +155,13 @@ export function ConnectDialog({
                 : "Select the subscription you want to use."}
             </p>
           </div>
-          <button className={iconButton} type="button" onClick={onClose} aria-label="Close">
+          <button
+            className={iconButton}
+            type="button"
+            disabled={busy}
+            onClick={() => void close()}
+            aria-label="Close"
+          >
             <X {...icon} />
           </button>
         </div>
@@ -171,7 +199,7 @@ export function ConnectDialog({
                     ? "Sign-in cancelled"
                     : "Finish signing in"}
             </h3>
-            {login.state === "pending" && login.prompt.userCode ? (
+            {login.state === "pending" && login.prompt.mode === "device" ? (
               <>
                 <p className="mb-[18px] max-w-[390px] text-zinc-600 dark:text-zinc-300">
                   Open the provider page and enter this one-time code.
@@ -197,6 +225,19 @@ export function ConnectDialog({
               </p>
             ) : null}
             {login.error ? <ErrorBanner>{login.error}</ErrorBanner> : null}
+            {error ? <ErrorBanner>{error}</ErrorBanner> : null}
+            {login.state === "failed" || login.state === "cancelled" ? (
+              <button
+                className={primaryButton}
+                type="button"
+                onClick={() => {
+                  setLogin(null);
+                  setError(null);
+                }}
+              >
+                Try again
+              </button>
+            ) : null}
           </div>
         ) : (
           <div className="grid gap-[18px] p-5">
@@ -212,6 +253,7 @@ export function ConnectDialog({
               <input
                 className="h-10 w-full rounded-lg border border-zinc-300 bg-zinc-50 px-3 text-zinc-900 outline-none placeholder:text-zinc-500 focus:border-zinc-500 focus:ring-3 focus:ring-zinc-300/50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:placeholder:text-zinc-400 dark:focus:border-zinc-500 dark:focus:ring-zinc-700"
                 value={account}
+                maxLength={128}
                 onChange={(event) => setAccount(event.target.value)}
                 placeholder="work"
               />
@@ -276,6 +318,6 @@ export function ConnectDialog({
           </div>
         )}
       </section>
-    </div>
+    </Modal>
   );
 }

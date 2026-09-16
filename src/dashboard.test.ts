@@ -49,6 +49,36 @@ afterEach(async () => {
 });
 
 describe("subscription auth dashboard", () => {
+  test("requires a same-origin session or API key for Realtime requests", async () => {
+    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "secret" });
+    const dashboard = await fetch(running.url);
+    const cookie = dashboard.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const url = `${running.url}/aisubs/test/default/v1/realtime`;
+    for (const origin of [undefined, "https://attacker.example"]) {
+      expect(
+        (await fetch(url, { headers: { cookie, ...(origin ? { origin } : {}) } })).status,
+      ).toBe(401);
+    }
+    expect((await fetch(url, { headers: { cookie, origin: running.url } })).status).toBe(426);
+    expect((await fetch(url, { headers: { authorization: "Bearer secret" } })).status).toBe(426);
+  });
+
+  test("preserves the payload-too-large status", async () => {
+    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    running = await createSubscriptionAuthDashboardServer({
+      auth,
+      apiKey: "secret",
+      maxProxyBodyBytes: 1024,
+    });
+    const response = await fetch(`${running.url}/v1/auth/test/login`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body: JSON.stringify({ account: "x".repeat(2048) }),
+    });
+    expect(response.status).toBe(413);
+  });
+
   test("accepts same-origin mutations on a dynamic port", async () => {
     directory = await mkdtemp(join(tmpdir(), "aisubs-dashboard-"));
     const store = new FileCredentialStore(join(directory, "credentials.json"));

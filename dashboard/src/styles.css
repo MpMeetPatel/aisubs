@@ -1,3 +1,16 @@
 @import "tailwindcss";
 @source "./";
 @custom-variant dark (&:where(.dark, .dark *));
+body:has(dialog[open]) {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

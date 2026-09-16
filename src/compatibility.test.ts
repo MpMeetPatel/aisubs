@@ -20,6 +20,172 @@ function sentBody(value: SubscriptionAuth): Record<string, unknown> {
 }
 
 describe("provider-neutral compatibility", () => {
+  test("preserves Google function-call identity when translating tool history", async () => {
+    const value = auth([{ id: "model", endpoints: ["chat/completions"] }], {
+      choices: [{ message: { content: "Done" } }],
+    });
+    const response = await proxyCompatible(
+      value,
+      "copilot",
+      "default",
+      "models/model:generateContent",
+      request({
+        contents: [
+          {
+            role: "model",
+            parts: [{ functionCall: { name: "weather", args: { city: "Paris" } } }],
+          },
+          {
+            role: "user",
+            parts: [{ functionResponse: { name: "weather", response: { temperature: 20 } } }],
+          },
+        ],
+      }),
+      new Headers(),
+    );
+    expect(response?.status).toBe(200);
+    const body = sentBody(value) as {
+      messages: Array<{ tool_calls?: Array<{ id: string }>; tool_call_id?: string }>;
+    };
+    expect(body.messages[1]?.tool_call_id).toBe(body.messages[0]?.tool_calls?.[0]?.id);
+  });
+
+  test("uses function names rather than call IDs for Google tool results", async () => {
+    const value = auth([{ id: "model", endpoints: ["models/model:generateContent"] }], {
+      candidates: [{ content: { parts: [{ text: "Done" }] } }],
+    });
+    await proxyCompatible(
+      value,
+      "test",
+      "default",
+      "chat/completions",
+      request({
+        model: "model",
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "weather", arguments: "{}" } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_1", content: "20 degrees" },
+        ],
+      }),
+      new Headers(),
+    );
+    expect(sentBody(value)).toMatchObject({
+      contents: [
+        { parts: [{ functionCall: { name: "weather" } }] },
+        { parts: [{ functionResponse: { name: "weather" } }] },
+      ],
+    });
+  });
+
+  test.each(["responses", "messages"])(
+    "translates explicit %s tool choice to Chat",
+    async (protocol) => {
+      const value = auth([{ id: "model", endpoints: ["chat/completions"] }], {
+        choices: [{ message: { content: "Done" } }],
+      });
+      await proxyCompatible(
+        value,
+        "copilot",
+        "default",
+        protocol,
+        request({
+          model: "model",
+          input: "hello",
+          messages: [{ role: "user", content: "hello" }],
+          tool_choice: { type: protocol === "responses" ? "function" : "tool", name: "weather" },
+        }),
+        new Headers(),
+      );
+      expect(sentBody(value)).toMatchObject({
+        tool_choice: { type: "function", function: { name: "weather" } },
+      });
+    },
+  );
+
+  test("rejects unavailable stored Responses history instead of dropping it", async () => {
+    const value = auth([{ id: "model", endpoints: ["chat/completions"] }], {});
+    const response = await proxyCompatible(
+      value,
+      "copilot",
+      "default",
+      "responses",
+      request({
+        model: "model",
+        input: "continue",
+        previous_response_id: "previous",
+      }),
+      new Headers(),
+    );
+    expect(response?.status).toBe(400);
+    expect(await response?.text()).toContain("unsupported_feature");
+    expect(value.proxy).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])("rejects truncated Responses streams (stream=%s)", async (stream) => {
+    const value = auth([{ id: "model", endpoints: ["responses"] }], {});
+    vi.mocked(value.proxy).mockResolvedValue(
+      new Response('data: {"type":"response.output_text.delta","delta":"partial"}\n\n'),
+    );
+    const response = await proxyCompatible(
+      value,
+      "chatgpt",
+      "default",
+      "chat/completions",
+      request({
+        model: "model",
+        stream,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      new Headers(),
+    );
+    if (stream) await expect(response!.text()).rejects.toThrow("terminal response event");
+    else {
+      expect(response?.status).toBe(502);
+      expect(await response?.text()).toContain("terminal response event");
+    }
+  });
+
+  test("stops reading upstream when the downstream consumer cancels", async () => {
+    let pulls = 0;
+    const cancel = vi.fn();
+    const value = auth([{ id: "model", endpoints: ["responses"] }], {});
+    vi.mocked(value.proxy).mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"type":"response.output_text.delta","delta":"next"}\n\n',
+              ),
+            );
+          },
+          cancel,
+        }),
+      ),
+    );
+    const response = await proxyCompatible(
+      value,
+      "chatgpt",
+      "default",
+      "chat/completions",
+      request({
+        model: "model",
+        stream: true,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      new Headers(),
+    );
+    const reader = response!.body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(pulls).toBeLessThanOrEqual(3);
+  });
   test("preserves explicit cache boundaries and TTL through Chat to Anthropic translation", async () => {
     const value = auth([{ id: "claude-test", endpoints: ["messages"] }], {
       content: [{ type: "text", text: "OK" }],

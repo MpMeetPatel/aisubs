@@ -334,6 +334,34 @@ describe("subscription auth HTTP server", () => {
     });
   });
 
+  test("preserves image input and shorthand messages in the Codex router", async () => {
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [
+      {
+        ...provider,
+        async getModels() {
+          return [{ id: "vision", endpoints: ["responses"] }];
+        },
+      },
+    ]);
+    await (await auth.account("test", "work").signIn()).wait();
+    const proxy = vi.spyOn(auth, "proxy").mockResolvedValue(Response.json({ output: [] }));
+    running = await createSubscriptionAuthServer({ auth, apiKey: "secret" });
+    const content = [
+      { type: "input_text", text: "Describe this" },
+      { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+    ];
+    const response = await fetch(`${running.url}/aisubs-codex/v1/responses`, {
+      method: "POST",
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      body: JSON.stringify({ model: "test/vision", input: [{ role: "user", content }] }),
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(proxy.mock.calls[0]?.[3]?.body))).toMatchObject({
+      model: "vision",
+      input: [{ type: "message", role: "user", content }],
+    });
+  });
+
   test("shares the account model cache across discovery and compatible requests", async () => {
     const getModels = vi.fn(async () => [
       { id: "claude-test", endpoints: ["messages"], supportsToolCall: true },

@@ -22,6 +22,7 @@ type AttemptRecord = {
   provider: ProviderId;
   accountKey: string;
   scope: string;
+  generation: number;
   state: LoginState;
   error: string | null;
   abort: AbortController;
@@ -252,13 +253,18 @@ export class SubscriptionAuth {
     }
     const epoch = this.advance(scope);
     for (const attempt of this.attempts.values()) {
-      if (attempt.scope === scope && attempt.state === "pending") attempt.abort.abort();
+      if (attempt.scope === scope) this.cancelAttempt(attempt);
     }
     const abort = new AbortController();
     const providerOptions = { ...options };
     delete providerOptions.account;
     delete providerOptions.replace;
     const login: ProviderLogin = await adapter.startLogin(abort.signal, providerOptions);
+    if (this.generation(scope) !== epoch) {
+      abort.abort();
+      void login.complete.catch(() => {});
+      throw new Error("Login cancelled");
+    }
     const id = crypto.randomUUID();
     let record: AttemptRecord;
     const promise = login.complete
@@ -286,6 +292,7 @@ export class SubscriptionAuth {
       provider,
       accountKey,
       scope,
+      generation: epoch,
       state: "pending" satisfies LoginState,
       error: null,
       abort,
@@ -308,10 +315,7 @@ export class SubscriptionAuth {
         return record.error;
       },
       wait: () => record.promise,
-      cancel: () => {
-        this.advance(scope);
-        abort.abort();
-      },
+      cancel: () => this.cancelAttempt(record),
     };
   }
 
@@ -337,9 +341,15 @@ export class SubscriptionAuth {
   cancelLoginAttempt(id: string): boolean {
     const attempt = this.attempts.get(id);
     if (!attempt || attempt.state !== "pending") return false;
-    this.advance(attempt.scope);
-    attempt.abort.abort();
+    this.cancelAttempt(attempt);
     return true;
+  }
+
+  private cancelAttempt(attempt: AttemptRecord): void {
+    if (attempt.state !== "pending") return;
+    if (this.generation(attempt.scope) === attempt.generation) this.advance(attempt.scope);
+    attempt.state = "cancelled";
+    attempt.abort.abort();
   }
 
   async status(
@@ -382,7 +392,7 @@ export class SubscriptionAuth {
     this.clearMetadata(scope);
     for (const refresh of this.refreshes.get(scope) ?? []) refresh.abort();
     for (const attempt of this.attempts.values()) {
-      if (attempt.scope === scope && attempt.state === "pending") attempt.abort.abort();
+      if (attempt.scope === scope) this.cancelAttempt(attempt);
     }
     await this.store.delete(scope);
   }

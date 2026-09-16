@@ -19,7 +19,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers },
   });
-  const body: unknown = await response.json().catch(() => ({}));
+  const text = await response.text();
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    if (response.ok) throw new Error("Server returned an invalid JSON response");
+  }
   if (!response.ok) {
     const failure = body && typeof body === "object" && "error" in body ? body.error : undefined;
     const fallback =
@@ -83,7 +89,7 @@ export function planKind(plan?: string): "free" | "paid" | "unknown" {
   return /free/i.test(plan) ? "free" : "paid";
 }
 
-export function loginMethods(provider: { loginModes: string[] }): string {
+export function loginMethods(provider: { loginModes: readonly string[] }): string {
   return provider.loginModes
     .map((mode) =>
       mode === "external-cli"
