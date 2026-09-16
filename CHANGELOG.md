@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 - 2026-09-16
+
+- Improve provider compatibility, proxy handling, and request normalization.
+- Harden dashboard account flows, modal interactions, and stale-load handling.
+- Add regression coverage for compatibility, proxy headers, authentication, and
+  dashboard behavior.
+
 ## 0.3.6 - 2026-09-15
 
 - Preserve provider cache controls and cache usage across OpenAI-compatible,
