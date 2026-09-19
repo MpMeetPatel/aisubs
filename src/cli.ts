@@ -8,7 +8,8 @@ import { claudeProvider } from "./providers/claude.js";
 import { copilotProvider } from "./providers/copilot.js";
 import { grokProvider } from "./providers/grok.js";
 import { openCodeGoProvider, openCodeZenProvider } from "./providers/opencode.js";
-import { defaultAiSubsDataDir, FileApiKeyStore, FileCredentialStore } from "./store.js";
+import { defaultAiSubsDataDir } from "./store.js";
+import { SqliteApiKeyStore, SqliteCredentialStore } from "./sqlite-store.js";
 
 const DEFAULT_DASHBOARD_PORT = 4319;
 
@@ -62,8 +63,9 @@ async function main(): Promise<void> {
   }
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid port");
 
-  const store = new FileCredentialStore(join(dataDirectory, "credentials.json"));
-  const apiKeys = new FileApiKeyStore(join(dataDirectory, "api-key"));
+  const database = join(dataDirectory, "aisubs.db");
+  const store = new SqliteCredentialStore(database);
+  const apiKeys = new SqliteApiKeyStore(database);
   const auth = createSubscriptionAuth({
     store,
     providers: [

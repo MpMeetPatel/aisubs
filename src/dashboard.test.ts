@@ -8,7 +8,7 @@ import {
   createSubscriptionAuthDashboardServer,
   type SubscriptionAuthDashboardServer,
 } from "./dashboard.js";
-import { FileCredentialStore } from "./store.js";
+import { MemoryCredentialStore } from "./memory-store.js";
 import type { ProviderAdapter } from "./types.js";
 
 const provider: ProviderAdapter = {
@@ -50,7 +50,7 @@ afterEach(async () => {
 
 describe("subscription auth dashboard", () => {
   test("requires a same-origin session or API key for Realtime requests", async () => {
-    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "secret" });
     const dashboard = await fetch(running.url);
     const cookie = dashboard.headers.get("set-cookie")!.split(";", 1)[0]!;
@@ -65,7 +65,7 @@ describe("subscription auth dashboard", () => {
   });
 
   test("preserves the payload-too-large status", async () => {
-    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     running = await createSubscriptionAuthDashboardServer({
       auth,
       apiKey: "secret",
@@ -81,7 +81,7 @@ describe("subscription auth dashboard", () => {
 
   test("accepts same-origin mutations on a dynamic port", async () => {
     directory = await mkdtemp(join(tmpdir(), "aisubs-dashboard-"));
-    const store = new FileCredentialStore(join(directory, "credentials.json"));
+    const store = new MemoryCredentialStore();
     const auth = new SubscriptionAuth(store, [provider]);
     running = await createSubscriptionAuthDashboardServer({ auth });
 
@@ -102,7 +102,7 @@ describe("subscription auth dashboard", () => {
   });
 
   test("rejects DNS-rebinding host headers", async () => {
-    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     running = await createSubscriptionAuthDashboardServer({ auth });
 
     const response = await new Promise<{ status: number; cookie: string[] | undefined }>(
@@ -120,7 +120,7 @@ describe("subscription auth dashboard", () => {
   });
 
   test("shows and regenerates the API key from the dashboard session", async () => {
-    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     const regenerate = vi.fn().mockResolvedValue("replacement");
     running = await createSubscriptionAuthDashboardServer({
       auth,
@@ -166,7 +166,7 @@ describe("subscription auth dashboard", () => {
     vi.stubEnv("CODEX_CATALOG", catalog);
     vi.stubEnv("AISUBS_PROVIDERS", "test");
 
-    const store = new FileCredentialStore(join(directory, "credentials.json"));
+    const store = new MemoryCredentialStore();
     await store.modify("test", () => ({ accessToken: "provider-token", expiresAt: 4e12 }));
     const auth = new SubscriptionAuth(store, [
       {
@@ -206,7 +206,7 @@ describe("subscription auth dashboard", () => {
   });
 
   test("coalesces simultaneous API key regeneration", async () => {
-    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     let finish!: (value: string) => void;
     const regenerate = vi.fn(() => new Promise<string>((resolve) => (finish = resolve)));
     running = await createSubscriptionAuthDashboardServer({
@@ -233,7 +233,7 @@ describe("subscription auth dashboard", () => {
   });
 
   test("streams redacted request logs to the dashboard session", async () => {
-    const auth = new SubscriptionAuth(new FileCredentialStore("/dev/null"), [provider]);
+    const auth = new SubscriptionAuth(new MemoryCredentialStore(), [provider]);
     vi.spyOn(auth, "proxy").mockResolvedValue(
       Response.json({ error: { message: "provider rejected request" } }, { status: 400 }),
     );
@@ -283,7 +283,7 @@ describe("subscription auth dashboard", () => {
 
   test("proxies authenticated account requests instead of serving the dashboard", async () => {
     directory = await mkdtemp(join(tmpdir(), "aisubs-dashboard-"));
-    const store = new FileCredentialStore(join(directory, "credentials.json"));
+    const store = new MemoryCredentialStore();
     const auth = new SubscriptionAuth(store, [provider]);
     vi.spyOn(auth, "proxy").mockResolvedValue(Response.json({ path: "/responses" }));
     running = await createSubscriptionAuthDashboardServer({ auth, apiKey: "secret" });

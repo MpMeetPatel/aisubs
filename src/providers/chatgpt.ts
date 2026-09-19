@@ -23,6 +23,7 @@ const VERIFICATION_URL = `${ISSUER}/codex/device`;
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const MODELS_URL = "https://chatgpt.com/backend-api/codex/models";
+const OPENAI_MODELS_URL = "https://developers.openai.com/api/docs/models";
 const EXPIRY_SKEW_MS = 5 * 60_000;
 const BROWSER_LOGIN_TIMEOUT_MS = 10 * 60_000;
 const BROWSER_CALLBACK_PORTS = [1455, 1457] as const;
@@ -99,6 +100,7 @@ function normalizeModel(value: unknown): (ProviderModel & { priority: number }) 
       })
     : [];
   const visibility = stringValue(value.visibility);
+  const outputModalities = stringArray(value.output_modalities);
   return {
     id,
     name: stringValue(value.display_name) ?? stringValue(value.name),
@@ -107,12 +109,70 @@ function normalizeModel(value: unknown): (ProviderModel & { priority: number }) 
     maxOutputTokens: numberValue(value.max_output_tokens),
     reasoningEfforts: levels.length ? levels : stringArray(value.supported_reasoning_efforts),
     inputModalities: stringArray(value.input_modalities),
-    endpoints: ["responses"],
+    outputModalities,
+    endpoints: outputModalities?.includes("image")
+      ? ["images/generations", "images/edits"]
+      : ["responses"],
     supportsToolCall:
       value.supports_tool_calls === false || value.supports_tools === false ? false : true,
     available: visibility !== "hide" && value.supported_in_api !== false,
     priority: numberValue(value.priority) ?? Number.MAX_SAFE_INTEGER,
   };
+}
+
+function imageModelName(id: string): string {
+  const [prefix, suffix] = id.startsWith("chatgpt-image-")
+    ? ["ChatGPT Image", id.slice("chatgpt-image-".length)]
+    : id.startsWith("dall-e-")
+      ? ["DALL-E", id.slice("dall-e-".length)]
+      : ["GPT Image", id.slice("gpt-image-".length)];
+  const label = suffix
+    .split("-")
+    .map((part) => (/^[a-z]/.test(part) ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(" ");
+  return `${prefix} ${label}`.trim();
+}
+
+export function parseOpenAiImageModels(html: string): ProviderModel[] {
+  const ids = new Set<string>();
+  const links = html.matchAll(
+    /href=["'](?:https:\/\/developers\.openai\.com)?\/api\/docs\/models\/([^"'/?#]+)[^"']*["']/gi,
+  );
+  for (const link of links) {
+    const id = decodeURIComponent(link[1] ?? "").toLowerCase();
+    if (/^(?:gpt-image-|chatgpt-image-|dall-e-)/.test(id)) ids.add(id);
+  }
+  return [...ids].map(openAiImageModel);
+}
+
+function openAiImageModel(id: string): ProviderModel {
+  return {
+    id,
+    name: imageModelName(id),
+    inputModalities: ["text", "image"],
+    outputModalities: ["image"],
+    endpoints: ["images/generations", "images/edits"],
+    supportsToolCall: false,
+    available: true,
+    selectable: true,
+  };
+}
+
+async function discoverOpenAiImageModels(
+  fetcher: typeof globalThis.fetch,
+  signal: AbortSignal,
+): Promise<ProviderModel[]> {
+  try {
+    const response = await fetcher(OPENAI_MODELS_URL, {
+      headers: { accept: "text/html" },
+      signal,
+    });
+    if (!response.ok) return [];
+    return parseOpenAiImageModels(await response.text());
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return [];
+  }
 }
 
 async function normalizeChatGptRequest(request: Request): Promise<Request> {
@@ -131,6 +191,7 @@ async function normalizeChatGptRequest(request: Request): Promise<Request> {
   if (sessionId) headers.set("session-id", sessionId);
   // Preserve instruction placement and message boundaries. The native Codex
   // client sends top-level instructions too; moving them does not enable caching.
+  delete body.max_output_tokens;
   delete body.prompt_cache_options;
   delete body.prompt_cache_retention;
   const stripBreakpoints = (value: unknown): unknown =>
@@ -485,12 +546,17 @@ export function chatGptProvider(options: ChatGptProviderOptions = {}): ProviderA
       const response = await fetch(url, { headers: { accept: "application/json" }, signal });
       const raw = await responseJson(response, "ChatGPT models");
       const models = Array.isArray(raw.models) ? raw.models : [];
-      return models
+      const languageModels = models
         .map(normalizeModel)
         .filter((model): model is ProviderModel & { priority: number } => Boolean(model))
         .filter((model) => model.available !== false)
         .sort((left, right) => left.priority - right.priority)
         .map(({ priority: _priority, ...model }) => model);
+      const listed = new Map(languageModels.map((model) => [model.id, model]));
+      for (const model of await discoverOpenAiImageModels(fetcher, signal)) {
+        if (!listed.has(model.id)) listed.set(model.id, model);
+      }
+      return [...listed.values()];
     },
     isPermanentRefreshError(error) {
       return (

@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type { OAuthCredential } from "./types.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -24,11 +23,19 @@ export function errorMessage(error: unknown): string {
 }
 
 export async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  try {
-    await delay(ms, undefined, { signal });
-  } catch {
-    throw new Error("Login cancelled");
-  }
+  if (signal?.aborted) throw new Error("Login cancelled");
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new Error("Login cancelled"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
 }
 
 export async function responseJson(

@@ -1,5 +1,6 @@
 import type {
   CredentialStore,
+  CoordinatedCredentialStore,
   CredentialSummary,
   LoginAttempt,
   LoginState,
@@ -13,9 +14,7 @@ import type {
   Session,
   SubscriptionAccountDetails,
 } from "./types.js";
-import { defaultAiSubsDataDir, FileCredentialStore } from "./store.js";
 import { errorMessage } from "./utils.js";
-import { join } from "node:path";
 
 type AttemptRecord = {
   id: string;
@@ -45,6 +44,15 @@ export interface SubscriptionAuthOptions {
 export const DEFAULT_ACCOUNT = "default";
 const ACCOUNT_STORAGE_PREFIX = "$subscription-account$";
 const LOGIN_ATTEMPT_RETENTION_MS = 5 * 60_000;
+
+function isCoordinatedStore(store: CredentialStore): store is CoordinatedCredentialStore {
+  return (
+    "readVersioned" in store &&
+    "replaceCredential" in store &&
+    "claimRefresh" in store &&
+    "commitRefresh" in store
+  );
+}
 
 function normalizeAccountKey(value: unknown): string {
   if (value == null) return DEFAULT_ACCOUNT;
@@ -127,6 +135,7 @@ export class SubscriptionAuth {
   private readonly attempts = new Map<string, AttemptRecord>();
   private readonly generations = new Map<ProviderId, number>();
   private readonly refreshes = new Map<ProviderId, Set<AbortController>>();
+  private readonly coordinatedRefreshes = new Map<ProviderId, Promise<OAuthCredential>>();
   private readonly usageCache = new Map<string, CacheEntry<ProviderUsage | null>>();
   private readonly modelsCache = new Map<string, CacheEntry<ProviderModels>>();
   private readonly usageInflight = new Map<string, Promise<ProviderUsage | null>>();
@@ -248,7 +257,10 @@ export class SubscriptionAuth {
     const accountKey = normalizeAccountKey(options?.account);
     const scope = credentialKey(provider, accountKey);
     const replace = options?.replace !== false;
-    if (!replace && (await this.store.read(scope))) {
+    const durable = isCoordinatedStore(this.store)
+      ? await this.store.readVersioned(scope)
+      : undefined;
+    if (!replace && (durable?.credential ?? (await this.store.read(scope)))) {
       throw new Error(`Account name ${accountKey} is already connected for ${provider}`);
     }
     const epoch = this.advance(scope);
@@ -256,6 +268,7 @@ export class SubscriptionAuth {
       if (attempt.scope === scope) this.cancelAttempt(attempt);
     }
     const abort = new AbortController();
+    const id = crypto.randomUUID();
     const providerOptions = { ...options };
     delete providerOptions.account;
     delete providerOptions.replace;
@@ -265,17 +278,28 @@ export class SubscriptionAuth {
       void login.complete.catch(() => {});
       throw new Error("Login cancelled");
     }
-    const id = crypto.randomUUID();
     let record: AttemptRecord;
     const promise = login.complete
       .then(async (credential) => {
-        const saved = await this.store.modify(scope, (current) => {
-          if (this.generation(scope) !== epoch) return current;
-          if (current && !replace) {
-            throw new Error(`Account name ${accountKey} is already connected for ${provider}`);
-          }
-          return credential;
-        });
+        let saved: OAuthCredential | null | undefined;
+        if (isCoordinatedStore(this.store)) {
+          const replacement = await this.store.replaceCredential({
+            provider: scope,
+            credential,
+            expectedGeneration: durable?.generation ?? 0,
+            operationId: `login:${id}`,
+          });
+          if (!replacement.applied) throw new Error("Login cancelled");
+          saved = replacement.record.credential;
+        } else {
+          saved = await this.store.modify(scope, (current) => {
+            if (this.generation(scope) !== epoch) return current;
+            if (current && !replace) {
+              throw new Error(`Account name ${accountKey} is already connected for ${provider}`);
+            }
+            return credential;
+          });
+        }
         if (this.generation(scope) !== epoch || !saved) throw new Error("Login cancelled");
         this.clearMetadata(scope);
         record.state = "complete";
@@ -394,7 +418,14 @@ export class SubscriptionAuth {
     for (const attempt of this.attempts.values()) {
       if (attempt.scope === scope) this.cancelAttempt(attempt);
     }
-    await this.store.delete(scope);
+    if (isCoordinatedStore(this.store)) {
+      await this.store.deleteCredential({
+        provider: scope,
+        operationId: `logout:${crypto.randomUUID()}`,
+      });
+    } else {
+      await this.store.delete(scope);
+    }
   }
 
   private async credential(
@@ -405,6 +436,23 @@ export class SubscriptionAuth {
     const adapter = this.adapter(provider);
     const accountKey = normalizeAccountKey(account);
     const scope = credentialKey(provider, accountKey);
+    if (isCoordinatedStore(this.store)) {
+      const pending = this.coordinatedRefreshes.get(scope);
+      if (pending) return pending;
+      const operation = this.coordinatedCredential(
+        this.store,
+        adapter,
+        provider,
+        accountKey,
+        scope,
+        forceRefresh,
+      ).finally(() => {
+        if (this.coordinatedRefreshes.get(scope) === operation)
+          this.coordinatedRefreshes.delete(scope);
+      });
+      this.coordinatedRefreshes.set(scope, operation);
+      return operation;
+    }
     const observed = await this.store.read(scope);
     if (!observed) throw new Error(`Not authenticated with ${provider} account ${accountKey}`);
     if (observed.metadata?.reauthRequired === true) {
@@ -453,6 +501,80 @@ export class SubscriptionAuth {
     }
     this.clearMetadata(scope);
     return refreshed;
+  }
+
+  private async coordinatedCredential(
+    store: CoordinatedCredentialStore,
+    adapter: ProviderAdapter,
+    provider: ProviderId,
+    accountKey: string,
+    scope: ProviderId,
+    forceRefresh: boolean,
+  ): Promise<OAuthCredential> {
+    const observed = await store.readVersioned(scope);
+    const credential = observed.credential;
+    if (!credential) throw new Error(`Not authenticated with ${provider} account ${accountKey}`);
+    if (credential.metadata?.reauthRequired === true) {
+      throw new Error(`Session expired for ${provider} account ${accountKey}; sign in again`);
+    }
+    if (!forceRefresh && credential.expiresAt > Date.now()) return credential;
+
+    const claimId = crypto.randomUUID();
+    const claim = await store.claimRefresh({
+      provider: scope,
+      expectedVersion: observed.version,
+      expectedGeneration: observed.generation,
+      claimId,
+      operationId: `refresh-claim:${claimId}`,
+    });
+    if (claim === "missing") {
+      throw new Error(`Not authenticated with ${provider} account ${accountKey}`);
+    }
+    if (claim !== "claimed") {
+      const deadline = Date.now() + this.refreshTimeoutMs;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const latest = await store.readVersioned(scope);
+        if (latest.version === observed.version && latest.generation === observed.generation)
+          continue;
+        if (!latest.credential || latest.credential.metadata?.reauthRequired === true) break;
+        if (latest.credential.expiresAt > Date.now()) return latest.credential;
+        break;
+      }
+      throw new Error(
+        `Refresh outcome is uncertain for ${provider} account ${accountKey}; sign in again`,
+      );
+    }
+
+    let next: OAuthCredential;
+    try {
+      next = await adapter.refresh(credential, AbortSignal.timeout(this.refreshTimeoutMs));
+    } catch (error) {
+      if (!adapter.isPermanentRefreshError?.(error)) throw error;
+      next = {
+        accessToken: "",
+        expiresAt: 0,
+        account: credential.account,
+        metadata: { ...credential.metadata, reauthRequired: true },
+      };
+    }
+    const committed = await store.commitRefresh({
+      provider: scope,
+      claimId,
+      expectedGeneration: observed.generation,
+      credential: next,
+      operationId: `refresh-commit:${claimId}`,
+    });
+    if (!committed.applied) {
+      throw new Error(`Session changed while refreshing ${provider} account ${accountKey}`);
+    }
+    const saved = committed.record.credential;
+    if (!saved || saved.metadata?.reauthRequired === true) {
+      this.clearMetadata(scope);
+      throw new Error(`Session expired for ${provider} account ${accountKey}; sign in again`);
+    }
+    this.clearMetadata(scope);
+    return saved;
   }
 
   async getAccessToken(provider: ProviderId, account = DEFAULT_ACCOUNT): Promise<string> {
@@ -675,11 +797,9 @@ export class SubscriptionAuth {
 
 export function createSubscriptionAuth(
   options: {
-    store?: CredentialStore;
+    store: CredentialStore;
     providers: readonly ProviderAdapter[];
   } & SubscriptionAuthOptions,
 ): SubscriptionAuth {
-  const store =
-    options.store ?? new FileCredentialStore(join(defaultAiSubsDataDir(), "credentials.json"));
-  return new SubscriptionAuth(store, options.providers, options);
+  return new SubscriptionAuth(options.store, options.providers, options);
 }

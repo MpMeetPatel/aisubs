@@ -6,6 +6,7 @@ import type {
   ProviderUsageData,
   UsageMeter,
 } from "../types.js";
+import { randomBytes } from "node:crypto";
 import {
   bearerRequest,
   isRecord,
@@ -18,6 +19,15 @@ import {
 
 const API_HOST = "opencode.ai";
 const API_KEY_LIFETIME_MS = 365 * 24 * 60 * 60_000;
+const DEFAULT_COMPATIBILITY_VERSION = "1.18.31";
+const COMPATIBILITY_VERSION_TTL_MS = 60 * 60_000;
+const ID_PATTERN = /^(ses|msg)_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+const ID_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+export interface OpenCodeProviderOptions {
+  compatibilityVersion?: string;
+  fetch?: typeof globalThis.fetch;
+}
 
 interface OpenCodeProviderConfig {
   id: "opencode-go" | "opencode-zen";
@@ -56,15 +66,51 @@ export function parseOpenCodeGoUsage(raw: unknown): ProviderUsageData | null {
   };
 }
 
-function documentedEndpoints(provider: OpenCodeProviderConfig["id"], model: string): string[] {
-  if (/^(gpt-|grok-)/.test(model)) return ["responses"];
-  if (provider === "opencode-go" && /^(minimax-|qwen)/.test(model)) return ["messages"];
-  if (provider === "opencode-zen" && /^(claude-|qwen)/.test(model)) return ["messages"];
-  if (provider === "opencode-zen" && model.startsWith("gemini-")) return [`models/${model}`];
-  return ["chat/completions"];
-}
-
-function openCodeProvider(config: OpenCodeProviderConfig): ProviderAdapter {
+function openCodeProvider(
+  config: OpenCodeProviderConfig,
+  options: OpenCodeProviderOptions = {},
+): ProviderAdapter {
+  const fetcher = options.fetch ?? globalThis.fetch;
+  let versionRequest: Promise<string> | undefined;
+  let versionExpiresAt = 0;
+  const compatibilityVersion = () => {
+    if (options.compatibilityVersion) return Promise.resolve(options.compatibilityVersion);
+    if (!versionRequest || Date.now() >= versionExpiresAt) {
+      versionExpiresAt = Date.now() + COMPATIBILITY_VERSION_TTL_MS;
+      versionRequest = fetcher("https://api.github.com/repos/anomalyco/opencode/releases/latest", {
+        headers: { accept: "application/vnd.github+json", "user-agent": "aisubs" },
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`OpenCode version lookup failed: ${response.status}`);
+          const raw: unknown = await response.json();
+          return isRecord(raw) ? stringValue(raw.tag_name)?.replace(/^v/, "") : undefined;
+        })
+        .then((version) => version || DEFAULT_COMPATIBILITY_VERSION)
+        .catch(() => DEFAULT_COMPATIBILITY_VERSION);
+    }
+    return versionRequest;
+  };
+  const routingIds = new Map<string, string>();
+  let lastTimestamp = 0;
+  let counter = 0;
+  const identifier = (prefix: "ses" | "msg", source: string | null): string => {
+    if (source && ID_PATTERN.test(source) && source.startsWith(`${prefix}_`)) return source;
+    const key = source ? `${prefix}:${source}` : undefined;
+    const cached = key ? routingIds.get(key) : undefined;
+    if (cached) return cached;
+    const timestamp = Date.now();
+    counter = timestamp === lastTimestamp ? counter + 1 : 1;
+    lastTimestamp = timestamp;
+    const encoded = BigInt(timestamp) * 0x1000n + BigInt(counter);
+    const time = Buffer.alloc(6);
+    for (let index = 0; index < time.length; index += 1) {
+      time[index] = Number((encoded >> BigInt(40 - 8 * index)) & 0xffn);
+    }
+    const random = [...randomBytes(14)].map((byte) => ID_CHARS[byte % ID_CHARS.length]).join("");
+    const value = `${prefix}_${time.toString("hex")}${random}`;
+    if (key) routingIds.set(key, value);
+    return value;
+  };
   const credential = (apiKey: string): OAuthCredential => ({
     accessToken: apiKey,
     expiresAt: Date.now() + API_KEY_LIFETIME_MS,
@@ -99,9 +145,15 @@ function openCodeProvider(config: OpenCodeProviderConfig): ProviderAdapter {
     async refresh(current) {
       return { ...current, expiresAt: Date.now() + API_KEY_LIFETIME_MS };
     },
-    authorize(request, current) {
+    async authorize(request, current) {
       requireAllowedHost(request, [API_HOST]);
-      return bearerRequest(request, current);
+      const client = request.headers.get("x-opencode-client")?.trim() || "aisubs";
+      return bearerRequest(request, current, {
+        "user-agent": `opencode/latest/${await compatibilityVersion()}/${client}`,
+        "x-opencode-client": client,
+        "x-opencode-session": identifier("ses", request.headers.get("x-opencode-session")),
+        "x-opencode-request": identifier("msg", request.headers.get("x-opencode-request")),
+      });
     },
     async getModels({ fetch, signal }) {
       const raw = await responseJson(
@@ -125,10 +177,7 @@ function openCodeProvider(config: OpenCodeProviderConfig): ProviderAdapter {
                 id,
                 name: stringValue(value.name),
                 description: stringValue(value.description),
-                endpoints:
-                  stringArray(value.supported_endpoints) ??
-                  stringArray(value.endpoints) ??
-                  documentedEndpoints(config.id, id),
+                endpoints: stringArray(value.supported_endpoints) ?? stringArray(value.endpoints),
                 available: true,
                 selectable: true,
               },
@@ -156,20 +205,26 @@ function openCodeProvider(config: OpenCodeProviderConfig): ProviderAdapter {
   };
 }
 
-export function openCodeGoProvider(): ProviderAdapter {
-  return openCodeProvider({
-    id: "opencode-go",
-    name: "OpenCode Go",
-    description: "OpenCode Go subscription access with an OpenCode API key.",
-    baseUrl: "https://opencode.ai/zen/go/v1",
-  });
+export function openCodeGoProvider(options: OpenCodeProviderOptions = {}): ProviderAdapter {
+  return openCodeProvider(
+    {
+      id: "opencode-go",
+      name: "OpenCode Go",
+      description: "OpenCode Go subscription access with an OpenCode API key.",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+    },
+    options,
+  );
 }
 
-export function openCodeZenProvider(): ProviderAdapter {
-  return openCodeProvider({
-    id: "opencode-zen",
-    name: "OpenCode Zen",
-    description: "OpenCode Zen pay-as-you-go access with an OpenCode API key.",
-    baseUrl: "https://opencode.ai/zen/v1",
-  });
+export function openCodeZenProvider(options: OpenCodeProviderOptions = {}): ProviderAdapter {
+  return openCodeProvider(
+    {
+      id: "opencode-zen",
+      name: "OpenCode Zen",
+      description: "OpenCode Zen pay-as-you-go access with an OpenCode API key.",
+      baseUrl: "https://opencode.ai/zen/v1",
+    },
+    options,
+  );
 }

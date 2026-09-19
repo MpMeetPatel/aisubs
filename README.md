@@ -438,9 +438,14 @@ bun add aisubs
 ```
 
 ```js
-import { chatGptProvider, createSubscriptionAuth } from "aisubs";
+import { createSubscriptionAuth } from "aisubs";
+import { SqliteCredentialStore } from "aisubs/node";
+import { chatGptProvider } from "aisubs/providers/chatgpt";
 
-const subscriptions = createSubscriptionAuth({ providers: [chatGptProvider()] });
+const subscriptions = createSubscriptionAuth({
+  store: new SqliteCredentialStore("./data/aisubs.db"),
+  providers: [chatGptProvider()],
+});
 const account = subscriptions.account("chatgpt", "personal");
 
 if (!(await account.status()).authenticated) {
@@ -493,19 +498,16 @@ Useful account methods:
 <summary><strong>Configure every provider and custom credential storage</strong></summary>
 
 ```js
-import {
-  FileCredentialStore,
-  chatGptProvider,
-  claudeProvider,
-  copilotProvider,
-  createSubscriptionAuth,
-  grokProvider,
-  openCodeGoProvider,
-  openCodeZenProvider,
-} from "aisubs";
+import { createSubscriptionAuth } from "aisubs";
+import { SqliteCredentialStore } from "aisubs/node";
+import { chatGptProvider } from "aisubs/providers/chatgpt";
+import { claudeProvider } from "aisubs/providers/claude";
+import { copilotProvider } from "aisubs/providers/copilot";
+import { grokProvider } from "aisubs/providers/grok";
+import { openCodeGoProvider, openCodeZenProvider } from "aisubs/providers/opencode";
 
 const subscriptions = createSubscriptionAuth({
-  store: new FileCredentialStore("./data/aisubs-credentials.json"),
+  store: new SqliteCredentialStore("./data/aisubs.db"),
   providers: [
     chatGptProvider(),
     claudeProvider(),
@@ -517,9 +519,10 @@ const subscriptions = createSubscriptionAuth({
 });
 ```
 
-Without a custom store, credentials are saved to
-`~/.aisubs/credentials.json`. Select an account with its provider ID and a
-local account name:
+Storage is always explicit. The core SDK never discovers a home directory,
+creates files, starts a server, or opens a browser. The standalone CLI composes
+the SQLite adapter at `~/.aisubs/aisubs.db`. Select an account with its provider
+ID and a local account name:
 
 ```js
 const chatgpt = subscriptions.account("chatgpt", "personal");
@@ -596,25 +599,23 @@ const response = await selected.proxy("responses", requestOptions);
 <summary><strong>Run the local HTTP server from Node.js</strong></summary>
 
 This is the programmatic equivalent of `aisubs dashboard`. The API key is
-created once and reused across restarts; delete or regenerate the key file only
-when clients should receive a new key.
+created once and reused across restarts; regenerate it when clients should
+receive a new key.
 
 ```js
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  FileApiKeyStore,
-  FileCredentialStore,
-  chatGptProvider,
-  claudeProvider,
-  createSubscriptionAuth,
-} from "aisubs";
+import { createSubscriptionAuth } from "aisubs";
 import { createSubscriptionAuthServer } from "aisubs/http";
+import { SqliteApiKeyStore, SqliteCredentialStore } from "aisubs/node";
+import { chatGptProvider } from "aisubs/providers/chatgpt";
+import { claudeProvider } from "aisubs/providers/claude";
 
 const directory = join(homedir(), ".aisubs");
-const apiKey = await new FileApiKeyStore(join(directory, "api-key")).readOrCreate();
+const database = join(directory, "aisubs.db");
+const apiKey = await new SqliteApiKeyStore(database).readOrCreate();
 const auth = createSubscriptionAuth({
-  store: new FileCredentialStore(join(directory, "credentials.json")),
+  store: new SqliteCredentialStore(database),
   providers: [chatGptProvider(), claudeProvider()],
 });
 
@@ -674,8 +675,7 @@ the old key.
 
 ## Storage and security
 
-- Credentials: `~/.aisubs/credentials.json`.
-- Persistent local API key: `~/.aisubs/api-key`.
+- Credentials and persistent local API key: `~/.aisubs/aisubs.db`.
 - Optional Codex catalog: `~/.codex/aisubs-catalog.json`.
 - Codex integration stores the local AISubs key in the user-private Codex config.
 - State directories and files use private permissions where the platform supports them.

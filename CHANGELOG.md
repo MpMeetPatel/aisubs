@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Breaking: `createSubscriptionAuth` now requires an explicit credential store.
+- Breaking: provider factories use the `aisubs/providers/*` entrypoints so the core `aisubs` import stays runtime-portable.
+- Add `aisubs/node` SQLite credential and API-key stores with shared-connection support and cross-process refresh ownership.
+- Persist standalone AISubs records in `~/.aisubs/aisubs.db` without retaining the legacy file-store implementation.
+
 ## 0.3.7 - 2026-09-16
 
 - Improve provider compatibility, proxy handling, and request normalization.

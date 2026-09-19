@@ -1,15 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  FileCredentialStore,
-  chatGptProvider,
-  claudeProvider,
-  copilotProvider,
-  createSubscriptionAuth,
-  grokProvider,
-  openCodeGoProvider,
-  openCodeZenProvider,
-} from "aisubs";
+import { createSubscriptionAuth } from "aisubs";
+import { SqliteCredentialStore } from "aisubs/node";
+import { chatGptProvider } from "aisubs/providers/chatgpt";
+import { claudeProvider } from "aisubs/providers/claude";
+import { copilotProvider } from "aisubs/providers/copilot";
+import { grokProvider } from "aisubs/providers/grok";
+import { openCodeGoProvider, openCodeZenProvider } from "aisubs/providers/opencode";
 
 const provider = process.argv[2] ?? "chatgpt";
 const accountKey = process.argv[3] ?? "default";
@@ -26,7 +23,7 @@ if (!providers.some((candidate) => candidate.id === provider)) {
 }
 
 const auth = createSubscriptionAuth({
-  store: new FileCredentialStore(join(homedir(), ".aisubs-demo", "credentials.json")),
+  store: new SqliteCredentialStore(join(homedir(), ".aisubs-demo", "aisubs.db")),
   providers,
 });
 const account = auth.account(provider, accountKey);

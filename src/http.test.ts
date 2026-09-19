@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { SubscriptionAuth } from "./auth.js";
 import { createSubscriptionAuthServer, type SubscriptionAuthServer } from "./http.js";
-import { MemoryCredentialStore } from "./store.js";
+import { MemoryCredentialStore } from "./memory-store.js";
 import type { ProviderAdapter } from "./types.js";
 
 const provider: ProviderAdapter = {
@@ -245,6 +245,7 @@ describe("subscription auth HTTP server", () => {
           capabilities: {
             endpoints: [],
             input_modalities: ["text"],
+            output_modalities: ["text"],
             reasoning_efforts: [],
             tools: false,
           },
@@ -258,6 +259,7 @@ describe("subscription auth HTTP server", () => {
           capabilities: {
             endpoints: [],
             input_modalities: ["text"],
+            output_modalities: ["text"],
             reasoning_efforts: [],
             tools: false,
           },

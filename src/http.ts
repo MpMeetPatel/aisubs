@@ -127,6 +127,7 @@ function openAiModel(provider: ProviderId, model: ProviderModel) {
     capabilities: {
       endpoints: model.endpoints ?? [],
       input_modalities: model.inputModalities ?? ["text"],
+      output_modalities: model.outputModalities ?? ["text"],
       reasoning_efforts: model.reasoningEfforts ?? [],
       tools: model.supportsToolCall ?? false,
     },

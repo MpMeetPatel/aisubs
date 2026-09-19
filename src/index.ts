@@ -5,20 +5,11 @@ export {
   type SubscriptionAccount,
   type SubscriptionAuthOptions,
 } from "./auth.js";
-export {
-  defaultAiSubsDataDir,
-  FileApiKeyStore,
-  FileCredentialStore,
-  MemoryCredentialStore,
-} from "./store.js";
-export { chatGptProvider, type ChatGptProviderOptions } from "./providers/chatgpt.js";
-export { claudeProvider, type ClaudeProviderOptions } from "./providers/claude.js";
-export { copilotProvider, type CopilotProviderOptions } from "./providers/copilot.js";
-export { grokProvider, type GrokProviderOptions } from "./providers/grok.js";
-export { openCodeGoProvider, openCodeZenProvider } from "./providers/opencode.js";
+export { MemoryCredentialStore } from "./memory-store.js";
 export { parseChatGptUsage, parseCopilotUsage, parseGrokUsage } from "./usage.js";
 export type {
   CredentialStore,
+  CoordinatedCredentialStore,
   CredentialSummary,
   BrowserLoginPrompt,
   DeviceLoginPrompt,
@@ -28,6 +19,7 @@ export type {
   LoginPrompt,
   LoginState,
   OAuthCredential,
+  VersionedCredential,
   ProviderAdapter,
   ProviderId,
   ProviderLogin,

@@ -26,6 +26,38 @@ export interface CredentialStore {
   delete(provider: ProviderId): Promise<void>;
 }
 
+export interface VersionedCredential {
+  credential: OAuthCredential | null;
+  version: number;
+  generation: number;
+}
+
+/** Structured, remote-safe credential mutations used by hosted/shared stores. */
+export interface CoordinatedCredentialStore extends CredentialStore {
+  readVersioned(provider: ProviderId): Promise<VersionedCredential>;
+  replaceCredential(input: {
+    provider: ProviderId;
+    credential: OAuthCredential;
+    expectedGeneration: number;
+    operationId: string;
+  }): Promise<{ applied: boolean; record: VersionedCredential }>;
+  deleteCredential(input: { provider: ProviderId; operationId: string }): Promise<void>;
+  claimRefresh(input: {
+    provider: ProviderId;
+    expectedVersion: number;
+    expectedGeneration: number;
+    claimId: string;
+    operationId: string;
+  }): Promise<"claimed" | "busy" | "changed" | "missing">;
+  commitRefresh(input: {
+    provider: ProviderId;
+    claimId: string;
+    expectedGeneration: number;
+    credential: OAuthCredential;
+    operationId: string;
+  }): Promise<{ applied: boolean; record: VersionedCredential }>;
+}
+
 export interface UsageMeter {
   id: string;
   label: string;
@@ -87,6 +119,7 @@ export interface ProviderModel {
   maxOutputTokens?: number;
   reasoningEfforts?: string[];
   inputModalities?: string[];
+  outputModalities?: string[];
   endpoints?: string[];
   supportsToolCall?: boolean;
   available?: boolean;

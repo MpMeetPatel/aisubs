@@ -18,8 +18,14 @@ describe("built-in subscription providers", () => {
       return Response.json({ data: [{ id: "kimi-k3", name: "Kimi K3" }] });
     });
     for (const [provider, url] of [
-      [openCodeGoProvider(), "https://opencode.ai/zen/go/v1/models"],
-      [openCodeZenProvider(), "https://opencode.ai/zen/v1/models"],
+      [
+        openCodeGoProvider({ compatibilityVersion: "1.18.31" }),
+        "https://opencode.ai/zen/go/v1/models",
+      ],
+      [
+        openCodeZenProvider({ compatibilityVersion: "1.18.31" }),
+        "https://opencode.ai/zen/v1/models",
+      ],
     ] as const) {
       const login = await provider.startLogin(new AbortController().signal, { apiKey: "key" });
       await expect(login.complete).resolves.toMatchObject({ accessToken: "key" });
@@ -33,19 +39,38 @@ describe("built-in subscription providers", () => {
         {
           id: "kimi-k3",
           name: "Kimi K3",
-          endpoints: ["chat/completions"],
+          description: undefined,
+          endpoints: undefined,
           available: true,
           selectable: true,
         },
       ]);
-      expect(
-        (
-          await provider.authorize(new Request(url), {
-            accessToken: "key",
-            expiresAt: Date.now() + 60_000,
-          })
-        ).headers.get("authorization"),
-      ).toBe("Bearer key");
+      const authorize = () =>
+        provider.authorize(
+          new Request(url, {
+            headers: {
+              "x-opencode-client": "core-loop",
+              "x-opencode-session": "conversation-1",
+              "x-opencode-request": "execution-1",
+            },
+          }),
+          { accessToken: "key", expiresAt: Date.now() + 60_000 },
+        );
+      const authorized = await authorize();
+      expect(authorized.headers.get("authorization")).toBe("Bearer key");
+      expect(authorized.headers.get("user-agent")).toBe("opencode/latest/1.18.31/core-loop");
+      expect(authorized.headers.get("x-opencode-session")).toMatch(
+        /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/,
+      );
+      expect(authorized.headers.get("x-opencode-request")).toMatch(
+        /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/,
+      );
+      expect((await authorize()).headers.get("x-opencode-session")).toBe(
+        authorized.headers.get("x-opencode-session"),
+      );
+      expect((await authorize()).headers.get("x-opencode-request")).toBe(
+        authorized.headers.get("x-opencode-request"),
+      );
     }
   });
 
@@ -76,6 +101,32 @@ describe("built-in subscription providers", () => {
     expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://opencode.ai/zen/go/v1/usage");
   });
 
+  test("OpenCode derives its compatibility user-agent from the current official release", async () => {
+    let version = "v9.8.7";
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetcher = vi.fn(async () => Response.json({ tag_name: version }));
+    const provider = openCodeZenProvider({
+      fetch: fetcher,
+    });
+    const authorize = () =>
+      provider.authorize(
+        new Request("https://opencode.ai/zen/v1/responses", {
+          headers: { "x-opencode-client": "core-loop" },
+        }),
+        { accessToken: "key", expiresAt: Date.now() + 60_000 },
+      );
+    try {
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+      version = "v9.8.8";
+      now += 60 * 60_000 + 1;
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.8/core-loop");
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("OpenCode Zen explicitly reports that balance usage is console-only", async () => {
     await expect(
       openCodeZenProvider().getUsage!({
@@ -89,26 +140,24 @@ describe("built-in subscription providers", () => {
     });
   });
 
-  test("OpenCode catalogs retain each documented wire protocol", async () => {
-    const models = async (provider: ReturnType<typeof openCodeGoProvider>, ids: string[]) =>
+  test("OpenCode catalogs preserve declared wire protocols without guessing from model ids", async () => {
+    const models = async (
+      provider: ReturnType<typeof openCodeGoProvider>,
+      rows: Record<string, unknown>[],
+    ) =>
       provider.getModels!({
         credential: { accessToken: "key", expiresAt: Date.now() + 60_000 },
         signal: new AbortController().signal,
-        fetch: async () => Response.json({ data: ids.map((id) => ({ id })) }),
+        fetch: async () => Response.json({ data: rows }),
       });
     await expect(
-      models(openCodeGoProvider(), ["gpt-5.6-luna", "qwen3.8-max", "kimi-k3"]),
+      models(openCodeGoProvider(), [
+        { id: "declared", supported_endpoints: ["responses"] },
+        { id: "undeclared" },
+      ]),
     ).resolves.toMatchObject([
-      { endpoints: ["responses"] },
-      { endpoints: ["messages"] },
-      { endpoints: ["chat/completions"] },
-    ]);
-    await expect(
-      models(openCodeZenProvider(), ["gpt-5.6-sol", "claude-opus-5", "gemini-3.6-flash"]),
-    ).resolves.toMatchObject([
-      { endpoints: ["responses"] },
-      { endpoints: ["messages"] },
-      { endpoints: ["models/gemini-3.6-flash"] },
+      { id: "declared", endpoints: ["responses"] },
+      { id: "undeclared", endpoints: undefined },
     ]);
   });
 
@@ -172,7 +221,9 @@ describe("built-in subscription providers", () => {
   });
 
   test("ChatGPT maps the account model catalog to safe common fields", async () => {
-    const provider = chatGptProvider();
+    const provider = chatGptProvider({
+      fetch: async () => new Response("", { status: 404 }),
+    });
     const models = await provider.getModels!({
       credential: { accessToken: "secret", expiresAt: Date.now() + 60_000 },
       signal: new AbortController().signal,
@@ -204,9 +255,47 @@ describe("built-in subscription providers", () => {
         maxOutputTokens: undefined,
         reasoningEfforts: ["low", "high"],
         inputModalities: ["text", "image"],
+        outputModalities: undefined,
         endpoints: ["responses"],
         supportsToolCall: true,
         available: true,
+      },
+    ]);
+  });
+
+  test("ChatGPT adds current image models from OpenAI's live model index", async () => {
+    const provider = chatGptProvider({
+      fetch: async () =>
+        new Response(`
+          <a href="/api/docs/models/gpt-image-2.5-sunburst">Sunburst</a>
+          <a href="https://developers.openai.com/api/docs/models/gpt-image-2.5-flare">Flare</a>
+        `),
+    });
+    const models = await provider.getModels!({
+      credential: { accessToken: "secret", expiresAt: Date.now() + 60_000 },
+      signal: new AbortController().signal,
+      fetch: async () => Response.json({ models: [] }),
+    });
+    expect(models).toEqual([
+      {
+        id: "gpt-image-2.5-sunburst",
+        name: "GPT Image 2.5 Sunburst",
+        inputModalities: ["text", "image"],
+        outputModalities: ["image"],
+        endpoints: ["images/generations", "images/edits"],
+        supportsToolCall: false,
+        available: true,
+        selectable: true,
+      },
+      {
+        id: "gpt-image-2.5-flare",
+        name: "GPT Image 2.5 Flare",
+        inputModalities: ["text", "image"],
+        outputModalities: ["image"],
+        endpoints: ["images/generations", "images/edits"],
+        supportsToolCall: false,
+        available: true,
+        selectable: true,
       },
     ]);
   });
@@ -233,7 +322,7 @@ describe("built-in subscription providers", () => {
     });
   });
 
-  test("ChatGPT keeps implicit cache routing and removes unsupported explicit controls", async () => {
+  test("ChatGPT removes unsupported Responses controls", async () => {
     const provider = chatGptProvider();
     const normalized = await provider.normalizeRequest!(
       new Request("https://chatgpt.com/backend-api/codex/responses", {
@@ -241,6 +330,7 @@ describe("built-in subscription providers", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           model: "gpt-5.6-luna",
+          max_output_tokens: 128_000,
           prompt_cache_key: "conversation-1",
           prompt_cache_options: { mode: "explicit", ttl: "30m" },
           prompt_cache_retention: "24h",

@@ -1,7 +1,6 @@
-import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { createSubscriptionAuth, SubscriptionAuth } from "./auth.js";
-import { defaultAiSubsDataDir, FileCredentialStore, MemoryCredentialStore } from "./store.js";
+import { MemoryCredentialStore } from "./memory-store.js";
 import type { OAuthCredential, ProviderAdapter, ProviderLogin } from "./types.js";
 
 const expired = (token = "old"): OAuthCredential => ({
@@ -69,13 +68,11 @@ describe("SubscriptionAuth", () => {
     await expect(first.wait()).rejects.toThrow("Login cancelled");
     expect(await auth.getAccessToken("test")).toBe("replacement");
   });
-  test("uses the default file store when no store is provided", () => {
-    const auth = createSubscriptionAuth({ providers: [adapter()] });
+  test("requires the host to choose storage explicitly", () => {
+    const store = new MemoryCredentialStore();
+    const auth = createSubscriptionAuth({ store, providers: [adapter()] });
 
-    expect(auth.store).toBeInstanceOf(FileCredentialStore);
-    expect((auth.store as FileCredentialStore).file).toBe(
-      join(defaultAiSubsDataDir(), "credentials.json"),
-    );
+    expect(auth.store).toBe(store);
   });
 
   test("signs in and returns a secret-free session", async () => {

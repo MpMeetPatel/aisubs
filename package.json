@@ -59,6 +59,10 @@
       "types": "./dist/dashboard.d.ts",
       "import": "./dist/dashboard.js"
     },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    },
     "./providers/chatgpt": {
       "types": "./dist/providers/chatgpt.d.ts",
       "import": "./dist/providers/chatgpt.js"
@@ -126,11 +130,12 @@
   "devEngines": {
     "packageManager": {
       "name": "nub",
-      "version": "^0.6.0",
-      "onFail": "warn"
+      "version": "^0.9.2",
+      "onFail": "ignore"
     }
   },
   "engines": {
     "node": ">=24"
-  }
+  },
+  "packageManager": "nub@0.9.2"
 }
