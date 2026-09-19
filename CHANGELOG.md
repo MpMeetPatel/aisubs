@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.8 - 2026-09-19
 
 - Breaking: `createSubscriptionAuth` now requires an explicit credential store.
 - Breaking: provider factories use the `aisubs/providers/*` entrypoints so the core `aisubs` import stays runtime-portable.
