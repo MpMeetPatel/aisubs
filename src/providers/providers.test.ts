@@ -14,18 +14,15 @@ function jwt(claims: Record<string, unknown>): string {
 describe("built-in subscription providers", () => {
   test("OpenCode Go and Zen accept API keys and expose their separate model catalogs", async () => {
     const fetcher = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes("api.github.com")) {
+        return Response.json({ tag_name: "v1.18.31" });
+      }
       expect(String(input)).toMatch(/https:\/\/opencode\.ai\/zen\/(go\/)?v1\/models/);
       return Response.json({ data: [{ id: "kimi-k3", name: "Kimi K3" }] });
     });
     for (const [provider, url] of [
-      [
-        openCodeGoProvider({ compatibilityVersion: "1.18.31" }),
-        "https://opencode.ai/zen/go/v1/models",
-      ],
-      [
-        openCodeZenProvider({ compatibilityVersion: "1.18.31" }),
-        "https://opencode.ai/zen/v1/models",
-      ],
+      [openCodeGoProvider({ fetch: fetcher }), "https://opencode.ai/zen/go/v1/models"],
+      [openCodeZenProvider({ fetch: fetcher }), "https://opencode.ai/zen/v1/models"],
     ] as const) {
       const login = await provider.startLogin(new AbortController().signal, { apiKey: "key" });
       await expect(login.complete).resolves.toMatchObject({ accessToken: "key" });
@@ -103,8 +100,6 @@ describe("built-in subscription providers", () => {
 
   test("OpenCode derives its compatibility user-agent from the current official release", async () => {
     let version = "v9.8.7";
-    let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const fetcher = vi.fn(async () => Response.json({ tag_name: version }));
     const provider = openCodeZenProvider({
       fetch: fetcher,
@@ -116,15 +111,22 @@ describe("built-in subscription providers", () => {
         }),
         { accessToken: "key", expiresAt: Date.now() + 60_000 },
       );
-    try {
-      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
-      version = "v9.8.8";
-      now += 60 * 60_000 + 1;
-      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.8/core-loop");
-      expect(fetcher).toHaveBeenCalledTimes(2);
-    } finally {
-      clock.mockRestore();
-    }
+    expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+    version = "v9.8.8";
+    expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.8/core-loop");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  test("OpenCode authorization fails instead of using a stale fallback version", async () => {
+    const provider = openCodeZenProvider({
+      fetch: vi.fn(async () => new Response(null, { status: 503 })),
+    });
+    await expect(
+      provider.authorize(new Request("https://opencode.ai/zen/v1/responses"), {
+        accessToken: "key",
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).rejects.toThrow("OpenCode version lookup failed: 503");
   });
 
   test("OpenCode Zen explicitly reports that balance usage is console-only", async () => {

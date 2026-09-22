@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.9 - 2026-09-22
+
+- Resolve the current OpenCode release for every authorized request instead of
+  caching or falling back to a stale compatibility version.
+- Rebuild AISubs before Core Loop release bundling so packaged consumers receive
+  the current provider authorization logic.
+
 ## 0.3.8 - 2026-09-19
 
 - Breaking: `createSubscriptionAuth` now requires an explicit credential store.
