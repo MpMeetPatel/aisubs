@@ -19,6 +19,7 @@ import {
 
 const API_HOST = "opencode.ai";
 const API_KEY_LIFETIME_MS = 365 * 24 * 60 * 60_000;
+const COMPATIBILITY_VERSION_TTL_MS = 60 * 60_000;
 const ID_PATTERN = /^(ses|msg)_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const ID_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -68,16 +69,41 @@ function openCodeProvider(
   options: OpenCodeProviderOptions = {},
 ): ProviderAdapter {
   const fetcher = options.fetch ?? globalThis.fetch;
+  let versionCache: { value?: string; error?: unknown; expiresAt: number } | undefined;
+  let versionRequest: Promise<string> | undefined;
   const compatibilityVersion = async () => {
-    const response = await fetcher(
-      "https://api.github.com/repos/anomalyco/opencode/releases/latest",
-      { headers: { accept: "application/vnd.github+json", "user-agent": "aisubs" } },
-    );
-    if (!response.ok) throw new Error(`OpenCode version lookup failed: ${response.status}`);
-    const raw: unknown = await response.json();
-    const version = isRecord(raw) ? stringValue(raw.tag_name)?.replace(/^v/, "") : undefined;
-    if (!version) throw new Error("OpenCode version lookup returned no release version");
-    return version;
+    if (versionCache && Date.now() < versionCache.expiresAt) {
+      if (versionCache.value) return versionCache.value;
+      throw versionCache.error;
+    }
+    if (versionRequest) return versionRequest;
+
+    const staleVersion = versionCache?.value;
+    versionRequest = (async () => {
+      try {
+        const response = await fetcher(
+          "https://api.github.com/repos/anomalyco/opencode/releases/latest",
+          { headers: { accept: "application/vnd.github+json", "user-agent": "aisubs" } },
+        );
+        if (!response.ok) throw new Error(`OpenCode version lookup failed: ${response.status}`);
+        const raw: unknown = await response.json();
+        const version = isRecord(raw) ? stringValue(raw.tag_name)?.replace(/^v/, "") : undefined;
+        if (!version) throw new Error("OpenCode version lookup returned no release version");
+        versionCache = { value: version, expiresAt: Date.now() + COMPATIBILITY_VERSION_TTL_MS };
+        return version;
+      } catch (error) {
+        versionCache = {
+          value: staleVersion,
+          error,
+          expiresAt: Date.now() + COMPATIBILITY_VERSION_TTL_MS,
+        };
+        if (staleVersion) return staleVersion;
+        throw error;
+      } finally {
+        versionRequest = undefined;
+      }
+    })();
+    return versionRequest;
   };
   const routingIds = new Map<string, string>();
   let lastTimestamp = 0;

@@ -98,7 +98,9 @@ describe("built-in subscription providers", () => {
     expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://opencode.ai/zen/go/v1/usage");
   });
 
-  test("OpenCode derives its compatibility user-agent from the current official release", async () => {
+  test("OpenCode caches its compatibility version for one hour", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     let version = "v9.8.7";
     const fetcher = vi.fn(async () => Response.json({ tag_name: version }));
     const provider = openCodeZenProvider({
@@ -111,22 +113,75 @@ describe("built-in subscription providers", () => {
         }),
         { accessToken: "key", expiresAt: Date.now() + 60_000 },
       );
-    expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
-    version = "v9.8.8";
-    expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.8/core-loop");
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    try {
+      const [first, concurrent] = await Promise.all([authorize(), authorize()]);
+      expect(first.headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+      expect(concurrent.headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+
+      version = "v9.8.8";
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+
+      now += 60 * 60_000 + 1;
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.8/core-loop");
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
-  test("OpenCode authorization fails instead of using a stale fallback version", async () => {
+  test("OpenCode keeps the last version when its hourly refresh fails", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ tag_name: "v9.8.7" }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
     const provider = openCodeZenProvider({
-      fetch: vi.fn(async () => new Response(null, { status: 503 })),
+      fetch: fetcher,
     });
-    await expect(
+    const authorize = () =>
+      provider.authorize(
+        new Request("https://opencode.ai/zen/v1/responses", {
+          headers: { "x-opencode-client": "core-loop" },
+        }),
+        {
+          accessToken: "key",
+          expiresAt: Date.now() + 60_000,
+        },
+      );
+    try {
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+      now += 60 * 60_000 + 1;
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+      expect((await authorize()).headers.get("user-agent")).toBe("opencode/latest/9.8.7/core-loop");
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("OpenCode does not repeat an initial failed lookup within the hour", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetcher = vi.fn(async () => new Response(null, { status: 503 }));
+    const provider = openCodeZenProvider({ fetch: fetcher });
+    const authorize = () =>
       provider.authorize(new Request("https://opencode.ai/zen/v1/responses"), {
         accessToken: "key",
         expiresAt: Date.now() + 60_000,
-      }),
-    ).rejects.toThrow("OpenCode version lookup failed: 503");
+      });
+    try {
+      await expect(authorize()).rejects.toThrow("OpenCode version lookup failed: 503");
+      await expect(authorize()).rejects.toThrow("OpenCode version lookup failed: 503");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+
+      now += 60 * 60_000 + 1;
+      await expect(authorize()).rejects.toThrow("OpenCode version lookup failed: 503");
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("OpenCode Zen explicitly reports that balance usage is console-only", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "aisubs",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "Connect AI provider accounts and use those subscriptions from any local tool or as api.",
   "keywords": [
     "ai",

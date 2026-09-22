@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10 - 2026-09-22
+
+- Cache the resolved OpenCode compatibility version for one hour and deduplicate
+  concurrent lookups.
+- Keep using the last successful version when an hourly GitHub refresh fails,
+  while rate-limiting initial lookup failures too.
+
 ## 0.3.9 - 2026-09-22
 
 - Resolve the current OpenCode release for every authorized request instead of
